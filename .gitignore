@@ -1,5 +1,11 @@
 .venv/
 __pycache__/
 models/
-data/
 *.png
+# Ignore training and validation datasets
+data/train/
+data/val/
+
+# But keep reference data files
+!data/reference/
+!data/reference/*

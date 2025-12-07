@@ -1,11 +1,11 @@
 # app.py — Chesapeake Sorting Assistant
 # NOTE:
-# - Search Assistant tab and its backend logic are unchanged.
-# - Visual Helper (Beta) changes ONLY:
-#     * Checkbox labels capitalized ("Glass Item", "Corrugated Cardboard...")
-#     * Added a new checkbox: "Plastic #1 or 2"
-#     * Hard rule: Grease/Food Residue overrides everything -> Trash.
-#       If Plastic #1 or 2 is checked AND Grease is NOT checked -> Mixed Recyclables.
+# - Search Assistant UPDATED (new approach):
+#     * Single Textbox stays ("Search for an item")
+#     * Suggestions are NOT a Dropdown anymore (no second bar).
+#     * Suggestions appear as a Radio list ONLY after typing >= 1 character.
+#     * Clicking a suggestion fills the textbox + hides the list + shows result.
+# - Visual Helper (Beta) unchanged from your version.
 
 import json
 import re
@@ -143,8 +143,8 @@ def render_detail_panel(category_key: str, bulk: bool, item_name: str) -> str:
 <div style='border:1px solid #ddd;border-radius:12px;padding:16px;background:#fff;
             box-shadow:0 2px 6px rgba(0,0,0,0.05);
             font-family:Inter,-apple-system,Helvetica,Arial,sans-serif;
-            color:#222;line-height:1.45;max-width:640px;'>
-  <div style="font-size:18px;font-weight:600;margin-bottom:4px;">{title}</div>
+            color:#000 !important;line-height:1.45;max-width:640px;'>
+  <div style="font-size:18px;font-weight:600;margin-bottom:4px;color:#000 !important;">{title}</div>
   <div style="font-size:13px;color:#555;margin-bottom:6px;">
     City of Chesapeake guidance · {label}
   </div>
@@ -225,16 +225,51 @@ def search_item(query: str):
     return render_detail_panel(match["category"], match["bulk"], match["item"])
 
 
+def live_filter_suggestions(query: str):
+    """
+    NEW (Radio suggestions):
+    - Empty textbox -> hide suggestions
+    - 1+ char -> show Radio list of matches
+    """
+    q = (query or "").strip().lower()
+
+    if len(q) == 0:
+        return gr.Radio(choices=[], value=None, visible=False)
+
+    starts = [item for item in ALL_ITEMS if item.lower().startswith(q)]
+    contains = [item for item in ALL_ITEMS if q in item.lower() and item not in starts]
+    choices = (starts + contains)[:75]
+
+    return gr.Radio(choices=choices, value=None, visible=True)
+
+
+def on_suggestion_pick(choice):
+    """
+    When user clicks a suggestion:
+    - put it into the textbox
+    - hide suggestions list
+    - show result
+    """
+    if not choice:
+        return (
+            gr.Textbox(value=""),
+            gr.Radio(visible=False),
+            '<em>Start typing an item name, then select a match from the list.</em>',
+        )
+
+    return (
+        gr.Textbox(value=choice),
+        gr.Radio(visible=False),
+        search_item(choice),
+    )
+
+
 # ---------- Visual Helper (Beta) + ML fallback ----------
 
 _INFERENCE_MODULE = None  # cached module
 
 
 def _infer_category_from_label(text: str) -> str:
-    """
-    Extra safety net if the ML model returns a description instead
-    of a clean category name.
-    """
     t = (text or "").lower()
     if "hazard" in t or "hhw" in t or "e-waste" in t or "e waste" in t:
         return "hazard"
@@ -250,9 +285,6 @@ def _infer_category_from_label(text: str) -> str:
 
 
 def _load_inference_module():
-    """
-    Dynamically import inference.py from the project root.
-    """
     global _INFERENCE_MODULE
     if _INFERENCE_MODULE is not None:
         return _INFERENCE_MODULE
@@ -272,15 +304,6 @@ def _load_inference_module():
 
 
 def _run_ml_classifier(image):
-    """
-    Call a model function in inference.py.
-
-    We look for one of: classify(img), predict(img), infer(img).
-    The function can return:
-      - a string label
-      - (label, confidence)
-      - {"label": ..., "confidence": ...}
-    """
     mod = _load_inference_module()
 
     fn = None
@@ -318,12 +341,10 @@ def _run_ml_classifier(image):
 
     label_str = str(label or "")
 
-    # Try to interpret the label into one of our canonical keys.
     cat_key = normalize_category(label_str)
     if cat_key == "unknown":
         cat_key = _infer_category_from_label(label_str)
 
-    # If the raw label is exactly one of our keys, honor it.
     raw = label_str.strip().lower()
     if cat_key == "unknown" and raw in CATS:
         cat_key = raw
@@ -332,11 +353,6 @@ def _run_ml_classifier(image):
 
 
 def _pretty_visual_title(category_key: str, raw_label: str) -> str:
-    """
-    Visual Helper ONLY:
-    If the model outputs a bare class like 'trash/mixed/cardboard',
-    show a nicer capitalized label in the card title.
-    """
     mapping = {
         "trash": "Trash",
         "mixed": "Mixed Recyclable",
@@ -351,17 +367,9 @@ def _pretty_visual_title(category_key: str, raw_label: str) -> str:
 
 
 def visual_helper(image, glass, grease, corrugated, plastic12):
-    """
-    Photo tool:
-      - Uses hard rules for glass / grease / corrugated / plastic #1/#2.
-      - Otherwise tries ML model in inference.py, if available.
-      - If ML isn't configured, shows a clear, styled info card.
-    """
     if image is None:
         return "<em>Please upload a photo first.</em>"
 
-    # Hard rules override ML completely.
-    # IMPORTANT: Grease overrides everything -> Trash.
     if grease:
         return render_detail_panel(
             "trash", False, "Greasy/food-soiled item (from photo)"
@@ -377,7 +385,6 @@ def visual_helper(image, glass, grease, corrugated, plastic12):
             "mixed", False, "Plastic #1 or 2 (from photo)"
         )
 
-    # ML fallback
     try:
         cat_key, confidence, raw_label = _run_ml_classifier(image)
     except Exception as e:
@@ -416,9 +423,32 @@ def visual_helper(image, glass, grease, corrugated, plastic12):
 
 theme = gr.themes.Soft(primary_hue="green")
 
+# Custom gray "pill" label styling (replaces the green Gradio label)
+GRAY_LABEL_CSS = r"""
+.gray-pill {
+  display: inline-block;
+  background: #e5e7eb;      /* light gray */
+  color: #111827;           /* near-black text */
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-weight: 700;
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  .gray-pill {
+    background: #374151;    /* dark gray */
+    color: #f9fafb;         /* near-white text */
+    border-color: #4b5563;
+  }
+}
+"""
+
 with gr.Blocks(
     title="Chesapeake Sorting Assistant",
     theme=theme,
+    css=GRAY_LABEL_CSS,
 ) as demo:
     gr.Markdown("## Chesapeake Sorting Assistant")
 
@@ -430,35 +460,52 @@ with gr.Blocks(
                 'You can type part of a word (like "mic" for microwave), then tap a match from the list.'
             )
 
-            # Use Gradio's native Dropdown with autocomplete
-            query = gr.Dropdown(
-                choices=ALL_ITEMS,
-                label="Search for an item",
+            # GRAY pill label (custom)
+            gr.HTML("<div class='gray-pill'>Search for an item and click from the list below</div>")
+
+            # SINGLE search box (real label hidden so it won't turn green)
+            query_box = gr.Textbox(
+                label=None,
+                show_label=False,
+                placeholder='Start typing… (ex: "mic", "battery", "bottle")'
+            )
+
+            # Suggestions list (Radio = no bar, just choices)
+            suggestions = gr.Radio(
+                choices=[],
                 value=None,
+                visible=False,
+                show_label=False,
                 interactive=True,
-                allow_custom_value=True,
             )
 
             result_html = gr.HTML()
             search_btn = gr.Button("Search", variant="primary")
 
-            # When user selects from dropdown or types
-            def on_query_change(selected):
-                if selected:
-                    return search_item(selected)
-                return '<em>Start typing an item name, then select a match from the list.</em>'
-
-            query.change(
-                fn=on_query_change,
-                inputs=query,
-                outputs=result_html,
+            # Show suggestions only after typing
+            query_box.input(
+                fn=live_filter_suggestions,
+                inputs=query_box,
+                outputs=suggestions
             )
 
-            # Search button (for users who just type and press Search)
+            # Picking a suggestion fills box, hides suggestions, shows result
+            suggestions.change(
+                fn=on_suggestion_pick,
+                inputs=suggestions,
+                outputs=[query_box, suggestions, result_html]
+            )
+
+            # Search button / Enter key
             search_btn.click(
-                fn=on_query_change,
-                inputs=query,
-                outputs=result_html,
+                fn=search_item,
+                inputs=query_box,
+                outputs=result_html
+            )
+            query_box.submit(
+                fn=search_item,
+                inputs=query_box,
+                outputs=result_html
             )
 
         # ---- Tab 2: Visual Helper (Beta) ----
