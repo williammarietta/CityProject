@@ -4,3 +4,4 @@ qrcode
 fastapi
 uvicorn
 openai
+torch
