@@ -1,0 +1,8 @@
+{
+  "best_val_acc": 0.856858846918489,
+  "classes": [
+    "cardboard",
+    "mixed",
+    "trash"
+  ]
+}

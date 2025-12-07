@@ -1,10 +1,13 @@
 .venv/
 __pycache__/
-models/
 *.png
+
 # Ignore training and validation datasets
 data/train/
 data/val/
+
+# Ignore Hugging Face / Spaces upload artifacts (not needed for backend)
+spaces_upload/
 
 # But keep reference data files
 !data/reference/
