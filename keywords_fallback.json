@@ -1,0 +1,56 @@
+{
+  
+  "corrugated": "cardboard",
+  "corrugated cardboard": "cardboard",
+  "shipping box": "cardboard",
+  "moving box": "cardboard",
+  "amazon box": "cardboard",
+  "brown shipping box": "cardboard",
+  "box with flutes": "cardboard",
+  "wavy middle layer": "cardboard",
+
+  
+  "paperboard": "mixed",
+  "cereal box": "mixed",
+  "tissue box": "mixed",
+  "shoebox": "mixed",
+  "shoe box": "mixed",
+  "thin cardboard": "mixed",
+  "gift box": "mixed",
+  "magazine": "mixed",
+  "newspaper": "mixed",
+  "junk mail": "mixed",
+  "office paper": "mixed",
+  "water bottle": "mixed",
+  "plastic bottle": "mixed",
+  "milk jug": "mixed",
+  "detergent bottle": "mixed",
+  "aluminum can": "mixed",
+  "soda can": "mixed",
+  "tin can": "mixed",
+  "steel can": "mixed",
+
+  
+  "glass": "trash",
+  "glass bottle": "trash",
+  "wine bottle": "trash",
+  "jar": "trash",
+  "mason jar": "trash",
+  "window glass": "trash",
+  "mirror": "trash",
+
+  "grease": "trash",
+  "greasy": "trash",
+  "oily": "trash",
+  "food residue": "trash",
+  "greasy pizza box": "trash",
+  "pizza box greasy": "trash",
+
+  "plastic bag": "trash",
+  "bagged recyclables": "trash",
+  "clamshell": "trash",
+  "clamshell plastic": "trash",
+  "styrofoam": "trash",
+  "foam container": "trash",
+  "polystyrene": "trash"
+}

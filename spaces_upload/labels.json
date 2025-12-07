@@ -1,0 +1,14 @@
+{
+  "cardboard": {
+    "title": "Cardboard",
+    "hint": "Put in the CARDBOARD container — corrugated/shipping boxes only; flatten."
+  },
+  "mixed": {
+    "title": "Mixed Recycling",
+    "hint": "Put in MIXED — plastics #1/#2 (check triangle), metal cans, mixed paper/paperboard (e.g., cereal/tissue boxes)."
+  },
+  "trash": {
+    "title": "Trash / Not Accepted",
+    "hint": "TRASH here: glass, plastic bags/bagged recyclables, greasy pizza boxes/food-soiled items, clamshell plastics, electronics/yard/construction/hazardous."
+  }
+}

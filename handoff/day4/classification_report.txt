@@ -1,0 +1,9 @@
+              precision    recall  f1-score   support
+
+   cardboard      0.928     0.963     0.945        80
+       mixed      0.931     0.909     0.920       296
+       trash      0.832     0.858     0.845       127
+
+    accuracy                          0.905       503
+   macro avg      0.897     0.910     0.903       503
+weighted avg      0.905     0.905     0.905       503

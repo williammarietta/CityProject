@@ -1,0 +1,5 @@
+﻿gradio
+pillow
+torch
+torchvision
+numpy

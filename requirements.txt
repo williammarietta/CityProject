@@ -1,0 +1,6 @@
+﻿gradio
+Pillow
+qrcode
+fastapi
+uvicorn
+openai
