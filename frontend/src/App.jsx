@@ -265,8 +265,7 @@ function App() {
 
                 {!isLoadingSuggestions && suggestions.length === 0 && query && (
                   <p className="muted-text">
-                    No suggestions yet. Try a different word (for example:
-                    &quot;battery&quot;, &quot;bottle&quot;, &quot;microwave&quot;).
+                    No suggestions found. You can still type any item and press Search for a smart lookup.
                   </p>
                 )}
 
@@ -332,7 +331,7 @@ function App() {
                   checked={vhGlass}
                   onChange={(e) => setVhGlass(e.target.checked)}
                 />
-                <label htmlFor="vh-glass">Glass item</label>
+                <label htmlFor="vh-glass"><b>Glass item</b></label>
               </div>
               <div className="checkbox-item">
                 <input
@@ -342,7 +341,7 @@ function App() {
                   onChange={(e) => setVhGrease(e.target.checked)}
                 />
                 <label htmlFor="vh-grease">
-                  Visible grease / food residue
+                  <b>Visible grease / food residue</b>
                 </label>
               </div>
               <div className="checkbox-item">
@@ -353,7 +352,7 @@ function App() {
                   onChange={(e) => setVhCorrugated(e.target.checked)}
                 />
                 <label htmlFor="vh-corrugated">
-                  Corrugated cardboard (shipping box)
+                  <b>Corrugated cardboard (shipping box)</b>
                 </label>
               </div>
               <div className="checkbox-item">
@@ -364,7 +363,10 @@ function App() {
                   onChange={(e) => setVhPlastic12(e.target.checked)}
                 />
                 <label htmlFor="vh-plastic12">
-                  Plastic #1 or #2 (bottle / jug)
+                 <b>Plastic #1 or #2</b><br /> 
+                   <span style={{ fontSize: "0.85em" }}>
+                    Check the item’s recycling triangle for its plastic number
+                  </span>
                 </label>
               </div>
             </div>

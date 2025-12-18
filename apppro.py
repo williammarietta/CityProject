@@ -108,8 +108,11 @@ def classification_message(category_key: str, bulk: bool) -> str:
 
     if bulk:
         base += (
-            " This item is also considered as a bulk pickup item. Please call 757-382-2489 "
-            "to schedule a bulk pickup if needed."
+        "<br><br>"
+        "<div style='padding:12px;border:1px solid #e5e7eb;border-radius:12px;'>"
+        "<div style='font-weight:700;margin-bottom:4px;'>FREE bulk pickup (call to confirm)</div>"
+        "<div>Call <span style='font-weight:700;'>757-382-2489</span> to schedule.</div>"
+        "</div>"
         )
 
     return base

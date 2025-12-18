@@ -5,6 +5,8 @@ from typing import List, Optional
 import io
 import os
 import json
+import re
+from html import escape
 
 from PIL import Image
 
@@ -51,6 +53,19 @@ class VisualHelperResponse(BaseModel):
     html: str
 
 
+# --- Joke “Easter eggs” for exact absurd inputs (no API cost) ---
+EASTER_EGGS = {
+    "love": (
+        "Love is 100% reusable—please keep it. 💚",
+        "Type a physical item and press Search (e.g., “battery”, “bottle”, “microwave”).",
+    ),
+    "saturn": (
+        "Saturn belongs in space… and is slightly too large for the drop-off bins. 🪐",
+        "Type a physical item and press Search (e.g., “battery”, “bottle”, “microwave”).",
+    ),
+}
+
+
 def _get_openai_client():
     """
     Returns an OpenAI client if the library and API key are available.
@@ -64,14 +79,54 @@ def _get_openai_client():
     return OpenAI(api_key=api_key)
 
 
-def _llm_fallback_classify(query: str) -> Optional[dict]:
+def _safe_json_loads(text: str) -> Optional[dict]:
     """
-    Ask the ChatGPT model to classify an arbitrary item description
-    into one of our 4 categories + bulk flag.
+    Tries to parse JSON. If the model returns extra text,
+    attempts to extract the first {...} block.
+    """
+    if not text:
+        return None
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
 
-    Returns:
-        dict like {"category": "trash", "bulk": False, "reason": "..."}
-        or None if anything goes wrong.
+    m = re.search(r"\{.*\}", text, flags=re.S)
+    if not m:
+        return None
+    try:
+        return json.loads(m.group(0))
+    except Exception:
+        return None
+
+
+def _render_fun_card(query: str, joke: str, hint: str) -> str:
+    """
+    Returns a friendly joke-style HTML card.
+    """
+    q = escape(query or "")
+    j = escape(joke or "")
+    h = escape(hint or "")
+
+    return f"""
+<div style='border:1px solid #ddd;border-radius:12px;padding:16px;background:#fff;
+            box-shadow:0 2px 6px rgba(0,0,0,0.05);
+            font-family:Inter,-apple-system,Helvetica,Arial,sans-serif;
+            color:#000 !important;line-height:1.45;max-width:640px;'>
+  <div style="font-size:18px;font-weight:700;margin-bottom:6px;color:#000 !important;">{q}</div>
+  <div style="font-size:14px;color:#111;margin-bottom:10px;">{j}</div>
+  <div style="font-size:13px;color:#555;">{h}</div>
+</div>
+"""
+
+
+def _llm_non_item_or_classify(query: str) -> Optional[dict]:
+    """
+    Single OpenAI call that decides:
+    - If query is NOT a physical household item -> return {"non_item": True, "joke":..., "hint":...}
+    - Else -> return normal classification {"non_item": False, "category":..., "bulk":..., "reason":...}
+
+    Returns None on failure.
     """
     q = (query or "").strip()
     if not q:
@@ -79,38 +134,41 @@ def _llm_fallback_classify(query: str) -> Optional[dict]:
 
     client = _get_openai_client()
     if client is None:
-        # Library not installed or API key missing
         return None
 
-    # Only allow these exact category strings
     allowed_categories = ["cardboard", "mixed", "trash", "hazard"]
 
     rules_text = """
-You are helping classify household waste items for Chesapeake, Virginia drop-off recycling centers.
+You help classify household waste items for Chesapeake, Virginia drop-off recycling centers.
 
 There are ONLY four allowed categories:
 - "cardboard": Corrugated shipping/moving boxes ONLY (flattened). Corrugated = has a fluted/wavy inner layer.
-- "mixed": Mixed recyclables: plastics #1 or #2 BOTTLES/JUGS, metal cans, mixed paper, and thin paperboard boxes (like cereal/tissue boxes) that are NOT greasy.
-- "trash": Items that are NOT accepted at these recycling centers, including glass, plastic bags/bagged recyclables, clamshell plastics, greasy/food-soiled paper or cardboard, styrofoam, and general household trash.
-- "hazard": Household hazardous waste or electronic waste (e-waste) that must go to a special SPSA facility: paints, chemicals, gasoline, pesticides, oil, car batteries, TVs, computers, etc.
+- "mixed": plastics #1 or #2 BOTTLES/JUGS, metal cans, mixed paper, and thin paperboard boxes (like cereal/tissue boxes) that are NOT greasy.
+- "trash": NOT accepted at these recycling centers, including glass, plastic bags/bagged recyclables, clamshell plastics, greasy/food-soiled paper or cardboard, styrofoam, and general household trash.
+- "hazard": household hazardous waste or electronic waste (e-waste) to SPSA: paints, chemicals, gasoline, pesticides, oil, car batteries, TVs, computers, etc.
 
-Some items may also be BULK PICKUP candidates (furniture, large appliances, mattresses, etc.). Bulk pickup is only true when the item is clearly a large household item that would not fit into a normal trash cart.
+Some items may also be BULK PICKUP candidates (furniture, large appliances, mattresses, etc.).
+Bulk pickup is only true when the item is clearly a large bulky object.
 
-CRITICAL INSTRUCTIONS:
-- ALWAYS output one of these categories: "cardboard", "mixed", "trash", or "hazard".
-- DO NOT invent new categories.
-- If unsure, choose the safest option for the recycling center contamination: usually "trash".
+Also: Sometimes users type words that are NOT physical items (e.g., emotions, planets, ideas).
+If the query is not a physical household item, mark it as non_item and generate a friendly joke + hint.
 """
 
-    # Ask for a tiny JSON object we can parse easily.
     system_prompt = rules_text + """
-You MUST respond ONLY with a valid JSON object of this form:
-{"category": "...", "bulk": true/false, "reason": "short explanation"}
+Return ONLY valid JSON in this exact shape:
+{
+  "non_item": true/false,
+  "category": "cardboard|mixed|trash|hazard",
+  "bulk": true/false,
+  "reason": "one short sentence",
+  "joke": "one friendly sentence (only if non_item is true, else empty string)",
+  "hint": "one short helpful sentence with examples like battery/bottle/microwave (only if non_item is true, else empty string)"
+}
 
-- "category" must be exactly one of: "cardboard", "mixed", "trash", "hazard".
-- "bulk" is true only if the item is clearly a large bulky object.
-- "reason" should be a single short sentence.
-Do not include any extra keys or text.
+Rules:
+- If non_item is true: set category="trash", bulk=false, and include joke + hint.
+- If non_item is false: choose category safely (if unsure, usually "trash"), bulk as appropriate, and set joke/hint to "".
+No extra keys. No extra text.
 """
 
     try:
@@ -118,7 +176,7 @@ Do not include any extra keys or text.
             model="gpt-4o-mini",
             messages=[
                 {"role": "developer", "content": system_prompt},
-                {"role": "user", "content": f'Classify this item: "{q}"'},
+                {"role": "user", "content": f'Classify this query: "{q}"'},
             ],
             temperature=0.0,
         )
@@ -130,22 +188,31 @@ Do not include any extra keys or text.
     except Exception:
         return None
 
-    if not content:
+    data = _safe_json_loads(content or "")
+    if not isinstance(data, dict):
         return None
 
-    try:
-        data = json.loads(content)
-    except Exception:
-        return None
-
+    non_item = bool(data.get("non_item", False))
     category = str(data.get("category", "")).strip().lower()
     bulk_flag = bool(data.get("bulk", False))
     reason = str(data.get("reason", "")).strip()
+    joke = str(data.get("joke", "")).strip()
+    hint = str(data.get("hint", "")).strip()
 
+    # If non-item, we only need joke + hint (category defaults to trash)
+    if non_item:
+        if not joke:
+            joke = "That doesn’t look like a physical item you can drop off. 🙂"
+        if not hint:
+            hint = "Try a physical item like “battery”, “bottle”, or “microwave”, then press Search."
+        return {"non_item": True, "joke": joke, "hint": hint}
+
+    # Normal classification path
     if category not in allowed_categories:
         return None
 
     return {
+        "non_item": False,
         "category": category,
         "bulk": bulk_flag,
         "reason": reason,
@@ -156,10 +223,12 @@ def _search_with_fallback(query: str) -> str:
     """
     Main search logic used by the /api/search endpoint.
 
-    1. Try the existing JSON-based search using _scored_matches.
-    2. If we get any match at all, keep your current JSON-based behavior.
-    3. If there is truly no match, call the LLM fallback to classify.
-    4. If LLM is unavailable or fails, return a gentle 'no result' message.
+    1. Try JSON-based search using _scored_matches.
+    2. If we get any match at all, reuse search_item(q).
+    3. If truly no match, do:
+       - Easter egg jokes for a few exact absurd words
+       - Otherwise OpenAI decides non-item joke vs real classification
+    4. If OpenAI unavailable/fails, return a gentle message.
     """
     q = (query or "").strip()
     if not q:
@@ -169,25 +238,33 @@ def _search_with_fallback(query: str) -> str:
     matches = _scored_matches(q)
     best = matches[0] if matches else None
 
-    # Preferred behavior for now:
-    # If we found ANY match via your existing logic, just reuse search_item(q).
-    # This keeps your current behavior exactly the same for known items.
     if best is not None:
         return search_item(q)
 
-    # Step 3: No match at all -> try LLM fallback
-    llm_result = _llm_fallback_classify(q)
-    if llm_result and llm_result.get("category"):
-        cat = llm_result["category"]
-        bulk_flag = bool(llm_result.get("bulk", False))
-        title = q  # use the user's phrase as the "item name" on the card
-        return render_detail_panel(cat, bulk_flag, title)
+    # Step 3a: Instant jokes (no API cost)
+    egg = EASTER_EGGS.get(q.lower())
+    if egg:
+        joke, hint = egg
+        return _render_fun_card(q, joke, hint)
 
-    # Step 4: LLM unavailable or failed -> safe fallback
+    # Step 3b: No match -> OpenAI decides joke vs classify
+    llm = _llm_non_item_or_classify(q)
+    if llm:
+        if llm.get("non_item") is True:
+            return _render_fun_card(q, llm.get("joke", ""), llm.get("hint", ""))
+
+        cat = llm.get("category")
+        if cat:
+            bulk_flag = bool(llm.get("bulk", False))
+            title = q
+            return render_detail_panel(cat, bulk_flag, title)
+
+    # Step 4: OpenAI unavailable or failed
+    safe_q = escape(q)
     return (
-        f'<em>No result for "{q}". '
-        "Try another word (for example, a simpler item name), "
-        "or ask a recycling center attendant for help.</em>"
+        f'<em>No result for "{safe_q}". '
+        "You can still type any item and press Search. "
+        'Try “battery”, “bottle”, or “microwave”.</em>'
     )
 
 
