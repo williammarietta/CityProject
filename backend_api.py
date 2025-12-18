@@ -53,15 +53,15 @@ class VisualHelperResponse(BaseModel):
     html: str
 
 
-# --- Joke “Easter eggs” for exact absurd inputs (no API cost) ---
-EASTER_EGGS = {
+# --- Gentle “non-item” notices for a few exact inputs (no API cost) ---
+NON_ITEM_EXACT = {
     "love": (
-        "Love is 100% reusable—please keep it. 💚",
-        "Type a physical item and press Search (e.g., “battery”, “bottle”, “microwave”).",
+        "Hmm… I’m not sure what item that is.",
+        "Please type a realistic household item (e.g., “battery”, “bottle”, “microwave”).",
     ),
     "saturn": (
-        "Saturn belongs in space… and is slightly too large for the drop-off bins. 🪐",
-        "Type a physical item and press Search (e.g., “battery”, “bottle”, “microwave”).",
+        "Hmm… that doesn’t look like a household item you can bring to a drop-off site.",
+        "Please type a realistic household item (e.g., “battery”, “bottle”, “microwave”).",
     ),
 }
 
@@ -100,12 +100,12 @@ def _safe_json_loads(text: str) -> Optional[dict]:
         return None
 
 
-def _render_fun_card(query: str, joke: str, hint: str) -> str:
+def _render_notice_card(query: str, message: str, hint: str) -> str:
     """
-    Returns a friendly joke-style HTML card.
+    Returns a neutral/helpful HTML notice card (no jokes).
     """
     q = escape(query or "")
-    j = escape(joke or "")
+    msg = escape(message or "")
     h = escape(hint or "")
 
     return f"""
@@ -114,7 +114,7 @@ def _render_fun_card(query: str, joke: str, hint: str) -> str:
             font-family:Inter,-apple-system,Helvetica,Arial,sans-serif;
             color:#000 !important;line-height:1.45;max-width:640px;'>
   <div style="font-size:18px;font-weight:700;margin-bottom:6px;color:#000 !important;">{q}</div>
-  <div style="font-size:14px;color:#111;margin-bottom:10px;">{j}</div>
+  <div style="font-size:14px;color:#111;margin-bottom:10px;">{msg}</div>
   <div style="font-size:13px;color:#555;">{h}</div>
 </div>
 """
@@ -123,8 +123,8 @@ def _render_fun_card(query: str, joke: str, hint: str) -> str:
 def _llm_non_item_or_classify(query: str) -> Optional[dict]:
     """
     Single OpenAI call that decides:
-    - If query is NOT a physical household item -> return {"non_item": True, "joke":..., "hint":...}
-    - Else -> return normal classification {"non_item": False, "category":..., "bulk":..., "reason":...}
+    - If query is NOT a physical household item -> {"non_item": True, "message":..., "hint":...}
+    - Else -> normal classification -> {"non_item": False, "category":..., "bulk":..., "reason":...}
 
     Returns None on failure.
     """
@@ -150,8 +150,8 @@ There are ONLY four allowed categories:
 Some items may also be BULK PICKUP candidates (furniture, large appliances, mattresses, etc.).
 Bulk pickup is only true when the item is clearly a large bulky object.
 
-Also: Sometimes users type words that are NOT physical items (e.g., emotions, planets, ideas).
-If the query is not a physical household item, mark it as non_item and generate a friendly joke + hint.
+Sometimes users type words that are NOT physical items (e.g., emotions, planets, ideas).
+If the query is not a physical household item, mark it as non_item and provide a neutral helpful message + hint.
 """
 
     system_prompt = rules_text + """
@@ -161,13 +161,13 @@ Return ONLY valid JSON in this exact shape:
   "category": "cardboard|mixed|trash|hazard",
   "bulk": true/false,
   "reason": "one short sentence",
-  "joke": "one friendly sentence (only if non_item is true, else empty string)",
-  "hint": "one short helpful sentence with examples like battery/bottle/microwave (only if non_item is true, else empty string)"
+  "message": "short neutral message (only if non_item is true, else empty string)",
+  "hint": "short helpful hint with examples like battery/bottle/microwave (only if non_item is true, else empty string)"
 }
 
 Rules:
-- If non_item is true: set category="trash", bulk=false, and include joke + hint.
-- If non_item is false: choose category safely (if unsure, usually "trash"), bulk as appropriate, and set joke/hint to "".
+- If non_item is true: set category="trash", bulk=false, and include message + hint.
+- If non_item is false: choose category safely (if unsure, usually "trash"), bulk as appropriate, and set message/hint to "".
 No extra keys. No extra text.
 """
 
@@ -196,18 +196,16 @@ No extra keys. No extra text.
     category = str(data.get("category", "")).strip().lower()
     bulk_flag = bool(data.get("bulk", False))
     reason = str(data.get("reason", "")).strip()
-    joke = str(data.get("joke", "")).strip()
+    message = str(data.get("message", "")).strip()
     hint = str(data.get("hint", "")).strip()
 
-    # If non-item, we only need joke + hint (category defaults to trash)
     if non_item:
-        if not joke:
-            joke = "That doesn’t look like a physical item you can drop off. 🙂"
+        if not message:
+            message = "Hmm… I’m not sure what this item is."
         if not hint:
-            hint = "Try a physical item like “battery”, “bottle”, or “microwave”, then press Search."
-        return {"non_item": True, "joke": joke, "hint": hint}
+            hint = "Please type a realistic household item (e.g., “battery”, “bottle”, “microwave”)."
+        return {"non_item": True, "message": message, "hint": hint}
 
-    # Normal classification path
     if category not in allowed_categories:
         return None
 
@@ -225,9 +223,9 @@ def _search_with_fallback(query: str) -> str:
 
     1. Try JSON-based search using _scored_matches.
     2. If we get any match at all, reuse search_item(q).
-    3. If truly no match, do:
-       - Easter egg jokes for a few exact absurd words
-       - Otherwise OpenAI decides non-item joke vs real classification
+    3. If truly no match:
+       - show a neutral notice for a few exact non-item inputs
+       - otherwise OpenAI decides non-item notice vs real classification
     4. If OpenAI unavailable/fails, return a gentle message.
     """
     q = (query or "").strip()
@@ -241,17 +239,17 @@ def _search_with_fallback(query: str) -> str:
     if best is not None:
         return search_item(q)
 
-    # Step 3a: Instant jokes (no API cost)
-    egg = EASTER_EGGS.get(q.lower())
-    if egg:
-        joke, hint = egg
-        return _render_fun_card(q, joke, hint)
+    # Step 3a: Instant neutral notices (no API cost)
+    exact = NON_ITEM_EXACT.get(q.lower())
+    if exact:
+        msg, hint = exact
+        return _render_notice_card(q, msg, hint)
 
-    # Step 3b: No match -> OpenAI decides joke vs classify
+    # Step 3b: No match -> OpenAI decides non-item notice vs classify
     llm = _llm_non_item_or_classify(q)
     if llm:
         if llm.get("non_item") is True:
-            return _render_fun_card(q, llm.get("joke", ""), llm.get("hint", ""))
+            return _render_notice_card(q, llm.get("message", ""), llm.get("hint", ""))
 
         cat = llm.get("category")
         if cat:
@@ -282,8 +280,7 @@ def _build_suggestions(query: str) -> List[str]:
 
     starts = [item for item in ALL_ITEMS if item.lower().startswith(q)]
     contains = [item for item in ALL_ITEMS if q in item.lower() and item not in starts]
-    choices = (starts + contains)[:75]
-    return choices
+    return (starts + contains)[:75]
 
 
 @app.post("/api/search", response_model=SearchResponse)
