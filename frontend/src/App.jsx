@@ -1,5 +1,5 @@
 // frontend/src/App.jsx
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import "./App.css";
 
 const API_BASE = "https://cityproject.onrender.com";
@@ -17,88 +17,118 @@ function App() {
   const [error, setError] = useState("");
 
   // ----- Visual Helper state -----
-  const [imageFile, setImageFile] = useState(null);
-  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
+  const [vhImageFile, setVhImageFile] = useState(null);
+  const [vhImagePreview, setVhImagePreview] = useState("");
   const [vhGlass, setVhGlass] = useState(false);
   const [vhGrease, setVhGrease] = useState(false);
   const [vhCorrugated, setVhCorrugated] = useState(false);
   const [vhPlastic12, setVhPlastic12] = useState(false);
   const [vhResultHtml, setVhResultHtml] = useState("");
-  const [vhError, setVhError] = useState("");
   const [vhIsLoading, setVhIsLoading] = useState(false);
 
-  // Fetch suggestions whenever query changes
-  useEffect(() => {
-    let ignore = false;
+  // ---------------- Search Assistant handlers ----------------
 
-    async function getSuggestions() {
-      const q = query.trim();
-      if (!q) {
-        setSuggestions([]);
-        return;
-      }
-
-      setIsLoadingSuggestions(true);
-      try {
-        const response = await fetch(
-          `${API_BASE}/api/suggestions?q=${encodeURIComponent(q)}`
-        );
-        if (!response.ok) throw new Error("Suggestion request failed");
-        const data = await response.json();
-        if (!ignore) setSuggestions(data.suggestions || []);
-      } catch (e) {
-        if (!ignore) setSuggestions([]);
-      } finally {
-        if (!ignore) setIsLoadingSuggestions(false);
-      }
-    }
-
-    // small debounce
-    const t = setTimeout(getSuggestions, 200);
-    return () => {
-      ignore = true;
-      clearTimeout(t);
-    };
-  }, [query]);
-
-  async function runSearch() {
-    const q = query.trim();
-    if (!q) return;
-
+  const handleQueryChange = async (event) => {
+    const value = event.target.value;
+    setQuery(value);
     setError("");
     setResultHtml("");
-    setIsSearching(true);
 
+    const trimmed = value.trim();
+
+    if (trimmed.length === 0) {
+      setSuggestions([]);
+      return;
+    }
+
+    setIsLoadingSuggestions(true);
+    try {
+      const response = await fetch(
+        `${API_BASE}/api/suggestions?q=` + encodeURIComponent(trimmed)
+      );
+      if (!response.ok) {
+        throw new Error("Network response was not ok");
+      }
+      const data = await response.json();
+      setSuggestions(data.choices || []);
+    } catch (err) {
+      console.error(err);
+      setError("Could not load suggestions. Make sure backend_api.py is running.");
+    } finally {
+      setIsLoadingSuggestions(false);
+    }
+  };
+
+  const handleSuggestionClick = (itemName) => {
+    setQuery(itemName);
+    setSuggestions([]);
+    setError("");
+    handleSearch(itemName);
+  };
+
+  const handleSearch = async (overrideQuery) => {
+    const q = (overrideQuery ?? query).trim();
+    if (q.length === 0) {
+      setError("Please type the name of an item first.");
+      setResultHtml("");
+      return;
+    }
+
+    setIsSearching(true);
+    setError("");
     try {
       const response = await fetch(`${API_BASE}/api/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: q }),
       });
-      if (!response.ok) throw new Error("Network response was not ok");
+      if (!response.ok) {
+        throw new Error("Network response was not ok");
+      }
       const data = await response.json();
       setResultHtml(data.html || "");
     } catch (err) {
       console.error(err);
-      setError("Search failed. Please try again.");
+      setError("Something went wrong talking to the backend. Is backend_api.py running?");
+      setResultHtml("");
     } finally {
       setIsSearching(false);
     }
-  }
+  };
 
-  async function runVisualHelper() {
-    if (!imageFile) {
-      setVhError("Please upload an image first.");
-      return;
+  const handleKeyDown = (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      handleSearch();
     }
+  };
 
-    setVhError("");
+  // ---------------- Visual Helper handlers ----------------
+
+  const handleVisualFileChange = (event) => {
+    const file = event.target.files && event.target.files[0];
+    setVhImageFile(file || null);
     setVhResultHtml("");
+    setError("");
+
+    if (file) {
+      const url = URL.createObjectURL(file);
+      setVhImagePreview(url);
+    } else {
+      setVhImagePreview("");
+    }
+  };
+
+  const handleVisualAnalyze = async () => {
+    setError("");
     setVhIsLoading(true);
+    setVhResultHtml("");
 
     try {
       const formData = new FormData();
-      formData.append("file", imageFile);
+      if (vhImageFile) {
+        formData.append("image", vhImageFile);
+      }
       formData.append("glass", String(vhGlass));
       formData.append("grease", String(vhGrease));
       formData.append("corrugated", String(vhCorrugated));
@@ -109,198 +139,247 @@ function App() {
         body: formData,
       });
 
-      if (!response.ok) throw new Error("Visual Helper request failed");
+      if (!response.ok) {
+        throw new Error("Network response was not ok");
+      }
+
       const data = await response.json();
       setVhResultHtml(data.html || "");
     } catch (err) {
       console.error(err);
-      setVhError("Visual Helper failed. Please try again.");
+      setError("Something went wrong talking to the Visual Helper. Is backend_api.py running?");
+      setVhResultHtml("");
     } finally {
       setVhIsLoading(false);
     }
-  }
+  };
 
-  function onSuggestionClick(itemName) {
-    setQuery(itemName);
-    setSuggestions([]);
-    setTimeout(runSearch, 0);
-  }
+  // ---------------- Tab switching ----------------
 
-  function onPickImage(file) {
-    setImageFile(file || null);
-    setVhResultHtml("");
-    setVhError("");
+  const switchToSearch = () => {
+    setActiveTab("search");
+    setError("");
+  };
 
-    if (!file) {
-      setImagePreviewUrl("");
-      return;
-    }
-    const url = URL.createObjectURL(file);
-    setImagePreviewUrl(url);
-  }
+  const switchToVisual = () => {
+    setActiveTab("visual");
+    setError("");
+  };
+
+  const trimmedQuery = query.trim();
+  const showNoSuggestionsHelp =
+    trimmedQuery.length > 0 && !isLoadingSuggestions && suggestions.length === 0;
 
   return (
-    <div className="page">
-      <header className="header">
-        <div className="title">Chesapeake Sorting Assistant</div>
-        <div className="subtitle">
-          Search-based guidance + optional photo helper (beta)
-        </div>
+    <div className="App">
+      <header className="app-header">
+        <h1>Chesapeake Sorting Assistant</h1>
+        <p className="app-subtitle">For City of Chesapeake, VA recycling drop-off locations</p>
       </header>
 
-      <div className="tabs">
-        <button
-          className={`tab ${activeTab === "search" ? "tab-active" : ""}`}
-          onClick={() => setActiveTab("search")}
-        >
-          Search Assistant
-        </button>
-        <button
-          className={`tab ${activeTab === "visual" ? "tab-active" : ""}`}
-          onClick={() => setActiveTab("visual")}
-        >
-          Visual Helper (Beta)
-        </button>
-      </div>
+      <main className="app-main">
+        {error && <p className="error-text">{error}</p>}
 
-      {activeTab === "search" && (
-        <section className="card">
-          <div className="card-title">Search for an item</div>
+        <div className="tabs">
+          <button
+            type="button"
+            onClick={switchToSearch}
+            className={`tab-button ${activeTab === "search" ? "tab-button-active" : ""}`}
+          >
+            Search Assistant (Recommended)
+          </button>
+          <button
+            type="button"
+            onClick={switchToVisual}
+            className={`tab-button ${activeTab === "visual" ? "tab-button-active" : ""}`}
+          >
+            Visual Helper (Beta)
+          </button>
+        </div>
 
-          <div className="search-row">
-            <input
-              className="search-input"
-              value={query}
-              placeholder='Try: "pizza box", "battery", "plastic bottle"...'
-              onChange={(e) => setQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") runSearch();
-              }}
-            />
-            <button className="btn" onClick={runSearch} disabled={isSearching}>
-              {isSearching ? "Searching..." : "Search"}
-            </button>
-          </div>
-
-          {isLoadingSuggestions && <p className="muted-text">Loading…</p>}
-
-          {!isLoadingSuggestions && suggestions.length > 0 && (
-            <div className="suggestions">
-              <ul className="suggestion-list">
-                {suggestions.map((s) => (
-                  <li key={s}>
-                    <button
-                      className="suggestion-item"
-                      onClick={() => onSuggestionClick(s)}
-                    >
-                      {s}
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-
-          {!isLoadingSuggestions && suggestions.length === 0 && query && (
-            <p className="muted-text">
-              No suggestions yet. You can still finish typing your item and press
-              Search — we'll check it even if it isn't in the list (and may use
-              OpenAI as a fallback if needed).
+        {activeTab === "search" && (
+          <section className="tab-content">
+            <h2>Search Assistant</h2>
+            <p className="tab-description">
+              Start typing the name of an item (for example: <b>"microwave"</b>, <b>"battery"</b>, or{" "}
+              <b>"bottle"</b>). We&apos;ll tell you whether it belongs in Mixed Recyclables,
+              Corrugated Cardboard, Household Hazardous Waste, or Trash / Not Accepted.
             </p>
-          )}
 
-          {!query && !isLoadingSuggestions && (
-            <p className="muted-text">
-              Start typing to see suggestions, or type any item and press Search.
-            </p>
-          )}
+            <div className="search-box">
+              <label className="search-label">Search for an item</label>
+              <div className="search-row">
+                <input
+                  className="search-input"
+                  type="text"
+                  value={query}
+                  onChange={handleQueryChange}
+                  onKeyDown={handleKeyDown}
+                  placeholder='Try: "pizza box", "battery", "plastic bottle"'
+                />
+                <button
+                  type="button"
+                  className="search-button"
+                  onClick={() => handleSearch()}
+                  disabled={isSearching}
+                >
+                  {isSearching ? "Searching..." : "Search"}
+                </button>
+              </div>
 
-          {error && <div className="error">{error}</div>}
+              <div className="suggestions-area">
+                {isLoadingSuggestions ? (
+                  <p className="loading-text">Loading suggestions...</p>
+                ) : suggestions.length > 0 ? (
+                  <ul className="suggestions-list">
+                    {suggestions.map((item) => (
+                      <li key={item}>
+                        <button
+                          type="button"
+                          className="suggestion-item"
+                          onClick={() => handleSuggestionClick(item)}
+                        >
+                          {item}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                ) : showNoSuggestionsHelp ? (
+                  <p className="muted-text">
+                    No suggestions yet — keep typing. If your item isn’t listed, you can still press{" "}
+                    <b>Search</b> and we’ll try to help anyway (including an AI fallback when needed).
+                  </p>
+                ) : (
+                  <p className="muted-text">Suggestions will appear here as you type.</p>
+                )}
+              </div>
 
-          {resultHtml && (
-            <div
-              className="result-html"
-              dangerouslySetInnerHTML={{ __html: resultHtml }}
-            />
-          )}
-        </section>
-      )}
-
-      {activeTab === "visual" && (
-        <section className="card">
-          <div className="card-title">Visual Helper (Beta)</div>
-
-          <div className="visual-row">
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(e) => onPickImage(e.target.files?.[0] || null)}
-            />
-          </div>
-
-          {imagePreviewUrl && (
-            <div className="preview">
-              <img src={imagePreviewUrl} alt="preview" />
+              <div className="result-card-wrapper">
+                {resultHtml ? (
+                  <div
+                    className="result-card"
+                    dangerouslySetInnerHTML={{ __html: resultHtml }}
+                  />
+                ) : (
+                  <div className="result-card-placeholder">
+                    <p className="muted-text">
+                      Result panel will show City of Chesapeake guidance for your item.
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
-          )}
+          </section>
+        )}
 
-          <div className="checkbox-grid">
-            <label className="checkbox-item">
+        {activeTab === "visual" && (
+          <section className="tab-content secondary-tab">
+            <h2>Visual Helper (Beta)</h2>
+            <p className="tab-description">
+              Upload a photo of an item. Use the checkboxes for hard rules (glass, grease/food, corrugated).
+            </p>
+
+            <div className="visual-upload">
               <input
-                type="checkbox"
-                checked={vhGlass}
-                onChange={(e) => setVhGlass(e.target.checked)}
+                className="visual-file-input"
+                type="file"
+                accept="image/*"
+                onChange={handleVisualFileChange}
               />
-              Glass
-            </label>
+              <p className="muted-text">
+                Tip: For best results, take the photo in good lighting with the item centered.
+              </p>
+            </div>
 
-            <label className="checkbox-item">
-              <input
-                type="checkbox"
-                checked={vhGrease}
-                onChange={(e) => setVhGrease(e.target.checked)}
-              />
-              Visible grease / food
-            </label>
+            <div className="visual-checkboxes">
+              <div className="checkbox-item">
+                <input
+                  id="vh-glass"
+                  type="checkbox"
+                  checked={vhGlass}
+                  onChange={(e) => setVhGlass(e.target.checked)}
+                />
+                <label htmlFor="vh-glass">Glass item</label>
+              </div>
 
-            <label className="checkbox-item">
-              <input
-                type="checkbox"
-                checked={vhCorrugated}
-                onChange={(e) => setVhCorrugated(e.target.checked)}
-              />
-              Corrugated cardboard (shipping box)
-            </label>
+              <div className="checkbox-item">
+                <input
+                  id="vh-grease"
+                  type="checkbox"
+                  checked={vhGrease}
+                  onChange={(e) => setVhGrease(e.target.checked)}
+                />
+                <label htmlFor="vh-grease">Visible grease / food residue</label>
+              </div>
 
-            <label className="checkbox-item">
-              <input
-                type="checkbox"
-                checked={vhPlastic12}
-                onChange={(e) => setVhPlastic12(e.target.checked)}
-              />
-              Plastic #1 or #2 (check the triangle!)
-            </label>
-          </div>
+              <div className="checkbox-item">
+                <input
+                  id="vh-corrugated"
+                  type="checkbox"
+                  checked={vhCorrugated}
+                  onChange={(e) => setVhCorrugated(e.target.checked)}
+                />
+                <label htmlFor="vh-corrugated">Corrugated cardboard (shipping box)</label>
+              </div>
 
-          <div className="visual-actions">
-            <button className="btn" onClick={runVisualHelper} disabled={vhIsLoading}>
-              {vhIsLoading ? "Analyzing..." : "Analyze photo"}
-            </button>
-          </div>
+              <div className="checkbox-item">
+                <input
+                  id="vh-plastic12"
+                  type="checkbox"
+                  checked={vhPlastic12}
+                  onChange={(e) => setVhPlastic12(e.target.checked)}
+                />
+                <label htmlFor="vh-plastic12">Plastic #1 or #2 (check the triangle!)</label>
+              </div>
+            </div>
 
-          {vhError && <div className="error">{vhError}</div>}
+            <div className="visual-actions">
+              <button
+                type="button"
+                className="search-button"
+                onClick={handleVisualAnalyze}
+                disabled={vhIsLoading}
+              >
+                {vhIsLoading ? "Analyzing..." : "Analyze Photo"}
+              </button>
+            </div>
 
-          {vhResultHtml && (
-            <div
-              className="result-html"
-              dangerouslySetInnerHTML={{ __html: vhResultHtml }}
-            />
-          )}
-        </section>
-      )}
+            <div className="visual-preview">
+              {vhImagePreview && (
+                <div>
+                  <p className="muted-text">Preview (local only):</p>
+                  <img
+                    src={vhImagePreview}
+                    alt="Uploaded item preview"
+                    className="preview-image"
+                  />
+                </div>
+              )}
+            </div>
 
-      <footer className="footer muted-text">
-        Built for Chesapeake, VA drop-off recycling guidance.
+            <div className="result-card-wrapper">
+              {vhResultHtml ? (
+                <div
+                  className="result-card"
+                  dangerouslySetInnerHTML={{ __html: vhResultHtml }}
+                />
+              ) : (
+                <div className="result-card-placeholder">
+                  <p className="muted-text">
+                    Visual Helper result will appear here after you upload a photo and click Analyze.
+                  </p>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+      </main>
+
+      <footer className="app-footer">
+        <p>
+          This guidance applies only to City of Chesapeake, VA recycling drop-off locations and may
+          differ from rules in other cities.
+        </p>
       </footer>
     </div>
   );
