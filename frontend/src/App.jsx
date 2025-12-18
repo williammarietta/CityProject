@@ -50,7 +50,7 @@ function App() {
         throw new Error("Network response was not ok");
       }
       const data = await response.json();
-      setSuggestions(data.choices || []);
+      setSuggestions((data.choices ?? data.suggestions ?? []));
     } catch (err) {
       console.error(err);
       setError("Could not load suggestions. Make sure backend_api.py is running.");
@@ -128,6 +128,7 @@ function App() {
       const formData = new FormData();
       if (vhImageFile) {
         formData.append("image", vhImageFile);
+        formData.append("file",vhImageFile);
       }
       formData.append("glass", String(vhGlass));
       formData.append("grease", String(vhGrease));

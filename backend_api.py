@@ -189,48 +189,45 @@ def _render_not_a_waste_item_panel(query: str, reason: str) -> str:
 """.strip()
 
 
-def _search_with_fallback(q: str) -> tuple[str, bool]:
+def _search_with_fallback(query: str) -> str:
     """
-    Returns (html, used_llm).
-    - First tries exact/strong matching using existing logic.
-    - If weak/no match, tries LLM fallback.
+    - Use JSON/keyword behavior only for STRONG matches (exact or prefix).
+    - If match is weak/indirect, use the LLM fallback so the user's exact phrase is handled.
     """
-    q = (q or "").strip()
+    q = (query or "").strip()
     if not q:
-        return "<em>Please enter an item.</em>", False
+        return '<em>Start typing an item name, then press Search.</em>'
 
-    # Step 1: Let existing logic handle exact matches / strong matches
-    html = search_item(q)
-    if html and "No strong match found" not in html:
-        return html, False
-
-    # Step 2: Check scored matches, and only proceed if weak
     matches = _scored_matches(q)
-    if matches:
-        top = matches[0]
-        # If we have a decent match, prefer the local encyclopedia logic.
-        # (Your scoring function already prefers exact/startswith.)
-        if top.get("name", "").lower().startswith(q.lower()) or top.get("name", "").lower() == q.lower():
-            cat = top.get("cat")
-            bulk_flag = bool(top.get("bulk", False))
-            item_title = top.get("item") or q
-            return render_detail_panel(cat, bulk_flag, item_title), False
+    best = matches[0] if matches else None
 
-    # Step 3: No match at all -> try LLM fallback
+    # STRONG match rule: exact match OR prefix match.
+    # This prevents broad inputs like "pizza" being forced into a random closest item.
+    if best is not None:
+        best_item = (best.get("item") or "").strip().lower()
+        q_low = q.lower()
+        if best_item == q_low or best_item.startswith(q_low):
+            return search_item(q)
+
+    # Weak or no match -> try LLM fallback
     llm_result = _llm_fallback_classify(q)
     if llm_result and llm_result.get("category"):
         cat = llm_result["category"]
         bulk_flag = bool(llm_result.get("bulk", False))
-        title = q  # use the user's phrase as the "item name" on the card
+        title = q  # show the user's phrase on the card
+        return render_detail_panel(cat, bulk_flag, title)
 
-        if cat == "not_a_waste_item":
-            # Friendly "try again" message instead of defaulting to Trash
-            return _render_not_a_waste_item_panel(q, llm_result.get("reason", "")), True
+    # If LLM is unavailable/fails, do NOT force a closest match.
+    return (
+        "<div style='border:1px solid #ddd;border-radius:12px;padding:16px;background:#fff'>"
+        "<div style='font-weight:800;letter-spacing:.08em;font-size:12px;color:#666'>NO CLEAR MATCH</div>"
+        f"<div style='font-size:18px;font-weight:800;margin-top:6px'>\"{q}\"</div>"
+        "<div style='margin-top:10px;color:#333'>"
+        "Try a more specific item (for example: <b>\"pizza box\"</b>, <b>\"battery\"</b>, <b>\"plastic bottle\"</b>)."
+        "</div>"
+        "</div>"
+    )
 
-        return render_detail_panel(cat, bulk_flag, title), True
-
-    # Step 4: Absolute fallback
-    return render_detail_panel("trash", False, q), False
 
 
 @app.post("/api/search", response_model=SearchResponse)
