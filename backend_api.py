@@ -25,10 +25,10 @@ except ImportError:
 
 app = FastAPI()
 
-# Allow your Netlify frontend to call this API
+# Allow your React dev server to talk to FastAPI
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # ok for now; can tighten later
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -41,11 +41,14 @@ class SearchRequest(BaseModel):
 
 class SearchResponse(BaseModel):
     html: str
-    used_llm: bool = False
 
 
-class SuggestResponse(BaseModel):
-    suggestions: List[str]
+class SuggestionsResponse(BaseModel):
+    choices: List[str]
+
+
+class VisualHelperResponse(BaseModel):
+    html: str
 
 
 def _get_openai_client():
@@ -64,7 +67,7 @@ def _get_openai_client():
 def _llm_fallback_classify(query: str) -> Optional[dict]:
     """
     Ask the ChatGPT model to classify an arbitrary item description
-    into one of our Chesapeake categories OR a special "not_a_waste_item" category.
+    into one of our 4 categories + bulk flag.
 
     Returns:
         dict like {"category": "trash", "bulk": False, "reason": "..."}
@@ -79,33 +82,32 @@ def _llm_fallback_classify(query: str) -> Optional[dict]:
         # Library not installed or API key missing
         return None
 
-    allowed_categories = ["cardboard", "mixed", "trash", "hazard", "not_a_waste_item"]
+    # Only allow these exact category strings
+    allowed_categories = ["cardboard", "mixed", "trash", "hazard"]
 
     rules_text = """
 You are helping classify household waste items for Chesapeake, Virginia drop-off recycling centers.
 
-You must classify the user's input into exactly one category from this list:
-
+There are ONLY four allowed categories:
 - "cardboard": Corrugated shipping/moving boxes ONLY (flattened). Corrugated = has a fluted/wavy inner layer.
-- "mixed": Mixed recyclables accepted at Chesapeake drop-off centers. This includes plastics #1 or #2 BOTTLES or JUGS (with necks), metal cans (aluminum, tin, or steel), mixed paper, and clean paperboard boxes (like cereal or tissue boxes) that are not greasy.
-- "trash": Items that are NOT accepted in these recycling containers, including glass, plastic bags or bagged recyclables, clamshell plastics, food- or grease-soiled paper/cardboard (like greasy pizza boxes), styrofoam, and general household trash.
-- "hazard": Household hazardous waste or electronic waste (e-waste), such as chemicals, paint, gasoline, pesticides, oil, car batteries, TVs, computers, etc. These do NOT go in the recycling containers and must go to proper HHW/e-waste programs.
-- "not_a_waste_item": Use this ONLY when the text clearly does NOT describe a physical object someone could place in trash or recycling (for example, emotions, ideas, planets, school grades, or other abstract concepts).
+- "mixed": Mixed recyclables: plastics #1 or #2 BOTTLES/JUGS, metal cans, mixed paper, and thin paperboard boxes (like cereal/tissue boxes) that are NOT greasy.
+- "trash": Items that are NOT accepted at these recycling centers, including glass, plastic bags/bagged recyclables, clamshell plastics, greasy/food-soiled paper or cardboard, styrofoam, and general household trash.
+- "hazard": Household hazardous waste or electronic waste (e-waste) that must go to a special SPSA facility: paints, chemicals, gasoline, pesticides, oil, car batteries, TVs, computers, etc.
 
-Some items may also be BULK PICKUP candidates (furniture, large appliances, mattresses, etc.) if they are a large household item that would not fit into a normal trash cart.
+Some items may also be BULK PICKUP candidates (furniture, large appliances, mattresses, etc.). Bulk pickup is only true when the item is clearly a large household item that would not fit into a normal trash cart.
 
 CRITICAL INSTRUCTIONS:
-- ALWAYS output one of these categories: "cardboard", "mixed", "trash", "hazard", or "not_a_waste_item".
-- Use "not_a_waste_item" when the input is not a concrete physical item.
+- ALWAYS output one of these categories: "cardboard", "mixed", "trash", or "hazard".
 - DO NOT invent new categories.
-- When you are unsure between "mixed" and "trash", choose "trash" to avoid contaminating recycling.
+- If unsure, choose the safest option for the recycling center contamination: usually "trash".
 """
 
+    # Ask for a tiny JSON object we can parse easily.
     system_prompt = rules_text + """
 You MUST respond ONLY with a valid JSON object of this form:
 {"category": "...", "bulk": true/false, "reason": "short explanation"}
 
-- "category" must be exactly one of: "cardboard", "mixed", "trash", "hazard", or "not_a_waste_item".
+- "category" must be exactly one of: "cardboard", "mixed", "trash", "hazard".
 - "bulk" is true only if the item is clearly a large bulky object.
 - "reason" should be a single short sentence.
 Do not include any extra keys or text.
@@ -124,7 +126,14 @@ Do not include any extra keys or text.
         return None
 
     try:
-        content = completion.choices[0].message.content.strip()
+        content = completion.choices[0].message.content
+    except Exception:
+        return None
+
+    if not content:
+        return None
+
+    try:
         data = json.loads(content)
     except Exception:
         return None
@@ -136,132 +145,97 @@ Do not include any extra keys or text.
     if category not in allowed_categories:
         return None
 
-    return {"category": category, "bulk": bulk_flag, "reason": reason}
-
-
-def _render_not_a_waste_item_panel(query: str, reason: str) -> str:
-    """
-    Render a friendly message when the LLM thinks the text is not
-    a real waste item (e.g., an emotion, idea, planet, etc.).
-    """
-    q = (query or "").strip() or "that"
-    extra = (reason or "").strip()
-
-    extra_html = (
-        f'<div style="margin-top:8px;font-size:13px;color:#555;">Model note: {extra}</div>'
-        if extra
-        else ""
-    )
-
-    return f"""
-<div style='border:1px solid #ddd;border-radius:12px;padding:16px;background:#fff;
-            box-shadow:0 2px 6px rgba(0,0,0,0.05);
-            font-family:Inter,-apple-system,Helvetica,Arial,sans-serif;
-            color:#000 !important;line-height:1.45;max-width:640px;'>
-  <div style="font-size:18px;font-weight:600;margin-bottom:4px;color:#000 !important;">
-    Not a waste item
-  </div>
-  <div style="font-size:13px;color:#555;margin-bottom:6px;">
-    City of Chesapeake guidance · Search Assistant
-  </div>
-
-  <div style="margin:10px 0;padding:10px;border-radius:10px;background:#f5f7fa;border:1px solid #e5e7eb;">
-    <div style="font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#111;">
-      Best next step
-    </div>
-    <div style="margin-top:2px;font-size:16px;font-weight:800;color:#000;">
-      Try a physical item
-    </div>
-  </div>
-
-  <div style="margin-top:8px;font-size:14px;color:#222;">
-    "{q}" isn't something you can toss in a bin. Try entering a specific physical item
-    you'd throw away or recycle, like "pizza box", "plastic bottle", or "cardboard box".
-  </div>
-
-  {extra_html}
-
-  <div style="margin-top:12px;font-size:11px;color:#777;">
-    This information is intended for City of Chesapeake, VA recycling drop-off locations.
-    Always follow on-site signage and staff instructions.
-  </div>
-</div>
-""".strip()
+    return {
+        "category": category,
+        "bulk": bulk_flag,
+        "reason": reason,
+    }
 
 
 def _search_with_fallback(query: str) -> str:
     """
-    - Use JSON/keyword behavior only for STRONG matches (exact or prefix).
-    - If match is weak/indirect, use the LLM fallback so the user's exact phrase is handled.
+    Main search logic used by the /api/search endpoint.
+
+    1. Try the existing JSON-based search using _scored_matches.
+    2. If we get any match at all, keep your current JSON-based behavior.
+    3. If there is truly no match, call the LLM fallback to classify.
+    4. If LLM is unavailable or fails, return a gentle 'no result' message.
     """
     q = (query or "").strip()
     if not q:
-        return '<em>Start typing an item name, then press Search.</em>'
+        return '<em>Start typing an item name, then select a match from the list.</em>'
 
+    # Step 1: Try normal scoring
     matches = _scored_matches(q)
     best = matches[0] if matches else None
 
-    # STRONG match rule: exact match OR prefix match.
-    # This prevents broad inputs like "pizza" being forced into a random closest item.
+    # Preferred behavior for now:
+    # If we found ANY match via your existing logic, just reuse search_item(q).
+    # This keeps your current behavior exactly the same for known items.
     if best is not None:
-        best_item = (best.get("item") or "").strip().lower()
-        q_low = q.lower()
-        if best_item == q_low or best_item.startswith(q_low):
-            return search_item(q)
+        return search_item(q)
 
-    # Weak or no match -> try LLM fallback
+    # Step 3: No match at all -> try LLM fallback
     llm_result = _llm_fallback_classify(q)
     if llm_result and llm_result.get("category"):
         cat = llm_result["category"]
         bulk_flag = bool(llm_result.get("bulk", False))
-        title = q  # show the user's phrase on the card
+        title = q  # use the user's phrase as the "item name" on the card
         return render_detail_panel(cat, bulk_flag, title)
 
-    # If LLM is unavailable/fails, do NOT force a closest match.
+    # Step 4: LLM unavailable or failed -> safe fallback
     return (
-        "<div style='border:1px solid #ddd;border-radius:12px;padding:16px;background:#fff'>"
-        "<div style='font-weight:800;letter-spacing:.08em;font-size:12px;color:#666'>NO CLEAR MATCH</div>"
-        f"<div style='font-size:18px;font-weight:800;margin-top:6px'>\"{q}\"</div>"
-        "<div style='margin-top:10px;color:#333'>"
-        "Try a more specific item (for example: <b>\"pizza box\"</b>, <b>\"battery\"</b>, <b>\"plastic bottle\"</b>)."
-        "</div>"
-        "</div>"
+        f'<em>No result for "{q}". '
+        "Try another word (for example, a simpler item name), "
+        "or ask a recycling center attendant for help.</em>"
     )
 
 
+def _build_suggestions(query: str) -> List[str]:
+    """
+    Lightweight suggestion logic for the React search box.
+
+    - Empty query -> no suggestions
+    - 1+ character -> list of items that start with the query,
+      then items that merely contain the query, up to 75 results.
+    """
+    q = (query or "").strip().lower()
+    if len(q) == 0:
+        return []
+
+    starts = [item for item in ALL_ITEMS if item.lower().startswith(q)]
+    contains = [item for item in ALL_ITEMS if q in item.lower() and item not in starts]
+    choices = (starts + contains)[:75]
+    return choices
+
 
 @app.post("/api/search", response_model=SearchResponse)
-def api_search(req: SearchRequest):
-    html, used_llm = _search_with_fallback(req.query)
-    return SearchResponse(html=html, used_llm=used_llm)
+async def api_search(body: SearchRequest):
+    html = _search_with_fallback(body.query)
+    return SearchResponse(html=html)
 
 
-@app.get("/api/suggestions", response_model=SuggestResponse)
-def api_suggestions(q: str = ""):
-    q = (q or "").strip().lower()
-    if not q:
-        return SuggestResponse(suggestions=[])
-
-    # show suggestions from ALL_ITEMS (from apppro.py)
-    results = []
-    for item in ALL_ITEMS:
-        if item.lower().startswith(q):
-            results.append(item)
-        if len(results) >= 12:
-            break
-
-    return SuggestResponse(suggestions=results)
+@app.get("/api/suggestions", response_model=SuggestionsResponse)
+async def api_suggestions(q: str = ""):
+    choices = _build_suggestions(q)
+    return SuggestionsResponse(choices=choices)
 
 
-@app.post("/api/visual-helper")
+@app.post("/api/visual-helper", response_model=VisualHelperResponse)
 async def api_visual_helper(
-    file: UploadFile = File(...),
+    image: UploadFile = File(None),
     glass: bool = Form(False),
     grease: bool = Form(False),
     corrugated: bool = Form(False),
     plastic12: bool = Form(False),
 ):
-    contents = await file.read()
-    image = Image.open(io.BytesIO(contents)).convert("RGB")
-    html = visual_helper(image, glass, grease, corrugated, plastic12)
-    return {"html": html}
+    pil_image = None
+    if image is not None:
+        data = await image.read()
+        try:
+            pil_image = Image.open(io.BytesIO(data)).convert("RGB")
+        except Exception:
+            pil_image = None
+
+    html = visual_helper(pil_image, glass, grease, corrugated, plastic12)
+    return VisualHelperResponse(html=html)

@@ -2,7 +2,7 @@
 import { useState } from "react";
 import "./App.css";
 
-const API_BASE = "https://cityproject.onrender.com";
+const API_BASE = "http://127.0.0.1:8000";
 
 function App() {
   // Which tab is active: "search" or "visual"
@@ -50,10 +50,12 @@ function App() {
         throw new Error("Network response was not ok");
       }
       const data = await response.json();
-      setSuggestions((data.choices ?? data.suggestions ?? []));
+      setSuggestions(data.choices || []);
     } catch (err) {
       console.error(err);
-      setError("Could not load suggestions. Make sure backend_api.py is running.");
+      setError(
+        "Could not load suggestions. Make sure backend_api.py is running."
+      );
     } finally {
       setIsLoadingSuggestions(false);
     }
@@ -89,7 +91,9 @@ function App() {
       setResultHtml(data.html || "");
     } catch (err) {
       console.error(err);
-      setError("Something went wrong talking to the backend. Is backend_api.py running?");
+      setError(
+        "Something went wrong talking to the backend. Is backend_api.py running?"
+      );
       setResultHtml("");
     } finally {
       setIsSearching(false);
@@ -112,8 +116,8 @@ function App() {
     setError("");
 
     if (file) {
-      const url = URL.createObjectURL(file);
-      setVhImagePreview(url);
+      const previewUrl = URL.createObjectURL(file);
+      setVhImagePreview(previewUrl);
     } else {
       setVhImagePreview("");
     }
@@ -128,7 +132,6 @@ function App() {
       const formData = new FormData();
       if (vhImageFile) {
         formData.append("image", vhImageFile);
-        formData.append("file",vhImageFile);
       }
       formData.append("glass", String(vhGlass));
       formData.append("grease", String(vhGrease));
@@ -148,7 +151,9 @@ function App() {
       setVhResultHtml(data.html || "");
     } catch (err) {
       console.error(err);
-      setError("Something went wrong talking to the Visual Helper. Is backend_api.py running?");
+      setError(
+        "Something went wrong talking to the Visual Helper. Is backend_api.py running?"
+      );
       setVhResultHtml("");
     } finally {
       setVhIsLoading(false);
@@ -167,15 +172,13 @@ function App() {
     setError("");
   };
 
-  const trimmedQuery = query.trim();
-  const showNoSuggestionsHelp =
-    trimmedQuery.length > 0 && !isLoadingSuggestions && suggestions.length === 0;
-
   return (
     <div className="App">
       <header className="app-header">
         <h1>Chesapeake Sorting Assistant</h1>
-        <p className="app-subtitle">For City of Chesapeake, VA recycling drop-off locations</p>
+        <p className="app-subtitle">
+          For City of Chesapeake, VA recycling drop-off locations
+        </p>
       </header>
 
       <main className="app-main">
@@ -183,40 +186,51 @@ function App() {
 
         <div className="tabs">
           <button
+            className={
+              "tab-button " + (activeTab === "search" ? "tab-button-active" : "")
+            }
             type="button"
             onClick={switchToSearch}
-            className={`tab-button ${activeTab === "search" ? "tab-button-active" : ""}`}
           >
             Search Assistant (Recommended)
           </button>
           <button
+            className={
+              "tab-button " + (activeTab === "visual" ? "tab-button-active" : "")
+            }
             type="button"
             onClick={switchToVisual}
-            className={`tab-button ${activeTab === "visual" ? "tab-button-active" : ""}`}
           >
             Visual Helper (Beta)
           </button>
         </div>
 
+        {/* ---------- Search Assistant tab ---------- */}
         {activeTab === "search" && (
           <section className="tab-content">
             <h2>Search Assistant</h2>
             <p className="tab-description">
-              Start typing the name of an item (for example: <b>"microwave"</b>, <b>"battery"</b>, or{" "}
-              <b>"bottle"</b>). We&apos;ll tell you whether it belongs in Mixed Recyclables,
-              Corrugated Cardboard, Household Hazardous Waste, or Trash / Not Accepted.
+              Start typing the name of an item (for example:{" "}
+              <strong>&quot;microwave&quot;</strong>,{" "}
+              <strong>&quot;battery&quot;</strong>, or{" "}
+              <strong>&quot;bottle&quot;</strong>). We&apos;ll tell you whether it
+              belongs in Mixed Recyclables, Corrugated Cardboard, Household
+              Hazardous Waste, or Trash / Not Accepted.
             </p>
 
             <div className="search-box">
-              <label className="search-label">Search for an item</label>
+              <label className="search-label" htmlFor="search-input">
+                Search for an item
+              </label>
               <div className="search-row">
                 <input
-                  className="search-input"
+                  id="search-input"
                   type="text"
+                  className="search-input"
+                  placeholder='Start typing… (example: "mic", "battery", "bottle")'
                   value={query}
                   onChange={handleQueryChange}
                   onKeyDown={handleKeyDown}
-                  placeholder='Try: "pizza box", "battery", "plastic bottle"'
                 />
                 <button
                   type="button"
@@ -229,9 +243,11 @@ function App() {
               </div>
 
               <div className="suggestions-area">
-                {isLoadingSuggestions ? (
-                  <p className="loading-text">Loading suggestions...</p>
-                ) : suggestions.length > 0 ? (
+                {isLoadingSuggestions && (
+                  <p className="loading-text">Loading suggestions…</p>
+                )}
+
+                {!isLoadingSuggestions && suggestions.length > 0 && (
                   <ul className="suggestions-list">
                     {suggestions.map((item) => (
                       <li key={item}>
@@ -245,50 +261,66 @@ function App() {
                       </li>
                     ))}
                   </ul>
-                ) : showNoSuggestionsHelp ? (
-                  <p className="muted-text">
-                    No suggestions yet — keep typing. If your item isn’t listed, you can still press{" "}
-                    <b>Search</b> and we’ll try to help anyway (including an AI fallback when needed).
-                  </p>
-                ) : (
-                  <p className="muted-text">Suggestions will appear here as you type.</p>
                 )}
-              </div>
 
-              <div className="result-card-wrapper">
-                {resultHtml ? (
-                  <div
-                    className="result-card"
-                    dangerouslySetInnerHTML={{ __html: resultHtml }}
-                  />
-                ) : (
-                  <div className="result-card-placeholder">
-                    <p className="muted-text">
-                      Result panel will show City of Chesapeake guidance for your item.
-                    </p>
-                  </div>
+                {!isLoadingSuggestions && suggestions.length === 0 && query && (
+                  <p className="muted-text">
+                    No suggestions yet. Try a different word (for example:
+                    &quot;battery&quot;, &quot;bottle&quot;, &quot;microwave&quot;).
+                  </p>
+                )}
+
+                {!query && !isLoadingSuggestions && (
+                  <p className="muted-text">
+                    Suggestions will appear here as you type.
+                  </p>
                 )}
               </div>
+            </div>
+
+            <div className="result-card-wrapper">
+              {resultHtml ? (
+                <div
+                  className="result-card"
+                  dangerouslySetInnerHTML={{ __html: resultHtml }}
+                />
+              ) : (
+                <div className="result-card-placeholder">
+                  <p className="muted-text">
+                    Result panel will show City of Chesapeake guidance for your
+                    item.
+                  </p>
+                </div>
+              )}
             </div>
           </section>
         )}
 
+        {/* ---------- Visual Helper tab ---------- */}
         {activeTab === "visual" && (
           <section className="tab-content secondary-tab">
             <h2>Visual Helper (Beta)</h2>
             <p className="tab-description">
-              Upload a photo of an item. Use the checkboxes for hard rules (glass, grease/food, corrugated).
+              Upload a clear photo of your item and tell us if it has glass,
+              visible grease, corrugated cardboard, or plastic #1/#2. We&apos;ll
+              combine your answers with the model&apos;s prediction and show the
+              best disposal option.
             </p>
 
             <div className="visual-upload">
+              <label className="search-label" htmlFor="vh-image">
+                Upload a photo
+              </label>
               <input
-                className="visual-file-input"
+                id="vh-image"
                 type="file"
                 accept="image/*"
+                className="visual-file-input"
                 onChange={handleVisualFileChange}
               />
               <p className="muted-text">
-                Tip: For best results, take the photo in good lighting with the item centered.
+                A simple photo is fine. Make sure the main item is clearly
+                visible.
               </p>
             </div>
 
@@ -302,7 +334,6 @@ function App() {
                 />
                 <label htmlFor="vh-glass">Glass item</label>
               </div>
-
               <div className="checkbox-item">
                 <input
                   id="vh-grease"
@@ -310,9 +341,10 @@ function App() {
                   checked={vhGrease}
                   onChange={(e) => setVhGrease(e.target.checked)}
                 />
-                <label htmlFor="vh-grease">Visible grease / food residue</label>
+                <label htmlFor="vh-grease">
+                  Visible grease / food residue
+                </label>
               </div>
-
               <div className="checkbox-item">
                 <input
                   id="vh-corrugated"
@@ -320,9 +352,10 @@ function App() {
                   checked={vhCorrugated}
                   onChange={(e) => setVhCorrugated(e.target.checked)}
                 />
-                <label htmlFor="vh-corrugated">Corrugated cardboard (shipping box)</label>
+                <label htmlFor="vh-corrugated">
+                  Corrugated cardboard (shipping box)
+                </label>
               </div>
-
               <div className="checkbox-item">
                 <input
                   id="vh-plastic12"
@@ -330,7 +363,9 @@ function App() {
                   checked={vhPlastic12}
                   onChange={(e) => setVhPlastic12(e.target.checked)}
                 />
-                <label htmlFor="vh-plastic12">Plastic #1 or #2 (check the triangle!)</label>
+                <label htmlFor="vh-plastic12">
+                  Plastic #1 or #2 (bottle / jug)
+                </label>
               </div>
             </div>
 
@@ -367,7 +402,8 @@ function App() {
               ) : (
                 <div className="result-card-placeholder">
                   <p className="muted-text">
-                    Visual Helper result will appear here after you upload a photo and click Analyze.
+                    Visual Helper result will appear here after you upload a
+                    photo and click Analyze.
                   </p>
                 </div>
               )}
@@ -378,8 +414,8 @@ function App() {
 
       <footer className="app-footer">
         <p>
-          This guidance applies only to City of Chesapeake, VA recycling drop-off locations and may
-          differ from rules in other cities.
+          This guidance applies only to City of Chesapeake, VA recycling
+          drop-off locations and may differ from rules in other cities.
         </p>
       </footer>
     </div>

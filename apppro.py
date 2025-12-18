@@ -28,69 +28,58 @@ CATS = {
     "trash": "Trash / Not Accepted",
 }
 
-# ----------------------------
-# Load canonical list + keywords
-# ----------------------------
 
-MASTER_LIST_PATH = ROOT / "data" / "reference" / "ultimate_master_list.txt"
+# ---------- Helpers to normalize category labels ----------
 
 
-def _load_keywords():
-    if not DATA_PATH.exists():
-        return {}
-    return json.loads(DATA_PATH.read_text(encoding="utf-8"))
+def normalize_category(raw_cat: str) -> str:
+    """
+    Turn whatever top-level key is in keywords_fallback.json
+    into one of: hazard, trash, cardboard, mixed, or unknown.
+    """
+    lc = (raw_cat or "").lower()
+    if "hazard" in lc or "hhw" in lc or "e-waste" in lc or "e waste" in lc:
+        return "hazard"
+    if "cardboard" in lc or "corrugated" in lc:
+        return "cardboard"
+    if "mixed" in lc or "recyclable" in lc:
+        return "mixed"
+    if "trash" in lc or "not accepted" in lc:
+        return "trash"
+    return "unknown"
 
 
-def _load_master_items():
-    items = []
-    if not MASTER_LIST_PATH.exists():
-        return items
-
-    for line in MASTER_LIST_PATH.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        # master list lines look like: "Aluminum cans — R"
-        # we just want the item name part before the dash
-        # but tolerate variations
-        parts = re.split(r"\s+[-—]\s+", line, maxsplit=1)
-        name = parts[0].strip()
-        if name:
-            items.append(name)
-    return items
+# ---------- Load data from your canonical JSON ----------
 
 
-KEYWORDS = _load_keywords()
-ALL_ITEMS = sorted(set(_load_master_items() + list(KEYWORDS.keys())))
+if not DATA_PATH.exists():
+    raise SystemExit(f"❌ Missing {DATA_PATH}")
 
-# records: internal “encyclopedia” entries derived from master list + keywords
+with DATA_PATH.open("r", encoding="utf-8") as f:
+    raw = json.load(f)
+
 records = []
-for item in ALL_ITEMS:
-    key = item
-    # Default values
-    cat = "trash"
-    bulk = False
+for raw_cat, items in raw.items():
+    cat_key = normalize_category(raw_cat)
+    for item in items:
+        text = item or ""
+        bulk = "(bulk pickup)" in text.lower()
+        clean = re.sub(r"\(bulk pickup\)", "", text, flags=re.I).strip()
+        records.append(
+            {
+                "item": clean,  # display name
+                "name": clean.lower(),  # lowercase for searching
+                "category": cat_key,  # hazard / trash / cardboard / mixed / unknown
+                "category_raw": raw_cat,  # original label
+                "bulk": bulk,
+            }
+        )
 
-    # If we have structured hints in keywords_fallback.json
-    if key in KEYWORDS:
-        entry = KEYWORDS[key]
-        if isinstance(entry, dict):
-            cat = entry.get("cat", cat)
-            bulk = bool(entry.get("bulk", False))
-
-    records.append(
-        {
-            "name": key.lower(),
-            "item": key,
-            "cat": cat,
-            "bulk": bulk,
-        }
-    )
+ALL_ITEMS = sorted({r["item"] for r in records}, key=str.lower)
 
 
-# ----------------------------
-# Guidance text
-# ----------------------------
+# ---------- Text templates (your exact wording) ----------
+
 
 def classification_message(category_key: str, bulk: bool) -> str:
     """
@@ -116,9 +105,11 @@ def classification_message(category_key: str, bulk: bool) -> str:
         )
     else:
         base = "No guidance available."
+
     if bulk:
         base += (
-            "<br><br><b>Bulk pickup option:</b> Call <b>757-382-2489</b> to schedule a <b>FREE</b> bulk pickup, if needed."
+            " This item is also considered as a bulk pickup item. Please call 757-382-2489 "
+            "to schedule a bulk pickup if needed."
         )
 
     return base
@@ -158,13 +149,9 @@ def render_detail_panel(category_key: str, bulk: bool, item_name: str) -> str:
     City of Chesapeake guidance · {label}
   </div>
 
-  <div style="margin:10px 0;padding:10px;border-radius:10px;background:#f5f7fa;border:1px solid #e5e7eb;">
-    <div style="font-size:12px;font-weight:800;letter-spacing:.04em;text-transform:uppercase;color:#111;">
-      Best disposal option
-    </div>
-    <div style="margin-top:2px;font-size:16px;font-weight:800;color:#000;">
-      {best_line}
-    </div>
+  <div style="margin-bottom:8px;">
+    <span style="font-size:13px;font-weight:600;color:#111;">Best disposal option:</span>
+    <span style="margin-left:4px;font-size:13px;color:#1f2933;">{best_line}</span>
   </div>
 
   <div style="margin-top:8px;font-size:14px;color:#222;">
@@ -181,27 +168,22 @@ def render_detail_panel(category_key: str, bulk: bool, item_name: str) -> str:
 
 # ---------- Matching logic (internal encyclopedia search) ----------
 
+
 def _score_match(query: str, record_name: str) -> float:
     """
     Higher = better match. Favors exact, then startswith, then contains.
     """
     q = query.lower()
-    r = record_name.lower()
-
-    if q == r:
-        return 100.0
-    if r.startswith(q):
-        return 70.0
-    if q in r:
-        return 40.0
-
-    # token overlap
-    q_tokens = set(re.findall(r"[a-z0-9]+", q))
-    r_tokens = set(re.findall(r"[a-z0-9]+", r))
-    if not q_tokens:
+    name = record_name.lower()
+    if not q:
         return 0.0
-    overlap = len(q_tokens & r_tokens) / max(1, len(q_tokens))
-    return overlap * 25.0
+    if q == name:
+        return 100.0
+    if name.startswith(q):
+        return 80.0
+    if q in name:
+        return 50.0
+    return 0.0
 
 
 def _scored_matches(query: str):
@@ -222,51 +204,166 @@ def best_match(query: str):
     return matches[0] if matches else None
 
 
-def search_item(query: str) -> str:
+# ---------- Search + suggestions (Search Assistant tab) ----------
+
+
+def search_item(query: str):
+    """
+    Called when the user presses the Search button.
+    They can type partial words; we pick the best match.
+    """
     q = (query or "").strip()
     if not q:
-        return "<em>Please enter an item.</em>"
+        return '<em>Start typing an item name, then select a match from the list.</em>'
 
     match = best_match(q)
     if not match:
-        return "<em>No strong match found.</em>"
+        return (
+            f'<em>No result for "{q}". Try another word (e.g., "box", "bottle", "paint").</em>'
+        )
 
-    cat = match.get("cat", "trash")
-    bulk = bool(match.get("bulk", False))
-    title = match.get("item") or q
-    return render_detail_panel(cat, bulk, title)
+    return render_detail_panel(match["category"], match["bulk"], match["item"])
 
 
-# ---------- Visual Helper (Beta) ----------
+def live_filter_suggestions(query: str):
+    """
+    NEW (Radio suggestions):
+    - Empty textbox -> hide suggestions
+    - 1+ char -> show Radio list of matches
+    """
+    q = (query or "").strip().lower()
 
-MODEL_META_PATH = ROOT / "model_meta.json"
+    if len(q) == 0:
+        return gr.Radio(choices=[], value=None, visible=False)
+
+    starts = [item for item in ALL_ITEMS if item.lower().startswith(q)]
+    contains = [item for item in ALL_ITEMS if q in item.lower() and item not in starts]
+    choices = (starts + contains)[:75]
+
+    return gr.Radio(choices=choices, value=None, visible=True)
+
+
+def on_suggestion_pick(choice):
+    """
+    When user clicks a suggestion:
+    - put it into the textbox
+    - hide suggestions list
+    - show result
+    """
+    if not choice:
+        return (
+            gr.Textbox(value=""),
+            gr.Radio(visible=False),
+            '<em>Start typing an item name, then select a match from the list.</em>',
+        )
+
+    return (
+        gr.Textbox(value=choice),
+        gr.Radio(visible=False),
+        search_item(choice),
+    )
+
+
+# ---------- Visual Helper (Beta) + ML fallback ----------
+
+_INFERENCE_MODULE = None  # cached module
+
+
+def _infer_category_from_label(text: str) -> str:
+    t = (text or "").lower()
+    if "hazard" in t or "hhw" in t or "e-waste" in t or "e waste" in t:
+        return "hazard"
+    if "cardboard" in t or "corrugated" in t:
+        return "cardboard"
+    if "mixed" in t and "recycl" in t:
+        return "mixed"
+    if "recycle" in t or "recyclable" in t:
+        return "mixed"
+    if "trash" in t or "landfill" in t or "not accepted" in t:
+        return "trash"
+    return "unknown"
+
+
+def _load_inference_module():
+    global _INFERENCE_MODULE
+    if _INFERENCE_MODULE is not None:
+        return _INFERENCE_MODULE
+
+    path = ROOT / "inference.py"
+    if not path.exists():
+        raise RuntimeError("inference.py not found in project folder.")
+
+    spec = importlib.util.spec_from_file_location("inference", path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Could not load inference.py module spec.")
+
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    _INFERENCE_MODULE = module
+    return module
 
 
 def _run_ml_classifier(image):
-    """
-    Loads & runs your trained model checkpoint if available.
-    Returns (category_key, confidence, raw_label).
-    """
-    if not MODEL_META_PATH.exists():
-        raise FileNotFoundError(f"Missing model_meta.json at {MODEL_META_PATH}")
+    mod = _load_inference_module()
 
-    meta = json.loads(MODEL_META_PATH.read_text(encoding="utf-8"))
-    checkpoint_path = ROOT / meta["checkpoint_path"]
-    labels_path = ROOT / meta["labels_path"]
-
-    if not checkpoint_path.exists():
-        raise FileNotFoundError(
-            f"Missing model checkpoint at {checkpoint_path}. Run train_finetune.py first to create it."
+    fn = None
+    for name in ("classify", "predict", "infer"):
+        candidate = getattr(mod, name, None)
+        if callable(candidate):
+            fn = candidate
+            break
+    if fn is None:
+        raise RuntimeError(
+            "No usable predict/classify/infer(img) function found in inference.py."
         )
-    if not labels_path.exists():
-        raise FileNotFoundError(f"Missing labels file at {labels_path}")
 
-    # Lazy import to avoid crashing when torch isn't installed
-    spec = importlib.util.spec_from_file_location("inference", str(ROOT / "inference.py"))
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+    result = fn(image)
 
-    return module.run_inference(image, meta, checkpoint_path, labels_path)
+    label = None
+    confidence = None
+
+    if isinstance(result, (list, tuple)):
+        if len(result) >= 1:
+            label = result[0]
+        if len(result) >= 2:
+            confidence = result[1]
+    elif isinstance(result, dict):
+        for key in ("label", "category", "pred", "prediction"):
+            if key in result:
+                label = result[key]
+                break
+        for key in ("confidence", "score", "prob", "probability"):
+            if key in result:
+                confidence = result[key]
+                break
+    else:
+        label = result
+
+    label_str = str(label or "")
+
+    cat_key = normalize_category(label_str)
+    if cat_key == "unknown":
+        cat_key = _infer_category_from_label(label_str)
+
+    raw = label_str.strip().lower()
+    if cat_key == "unknown" and raw in CATS:
+        cat_key = raw
+
+    return cat_key, confidence, label_str
+
+
+def _pretty_visual_title(category_key: str, raw_label: str) -> str:
+    mapping = {
+        "trash": "Trash",
+        "mixed": "Mixed Recyclable",
+        "cardboard": "Corrugated Cardboard",
+    }
+    r = (raw_label or "").strip()
+    if r.lower() in mapping:
+        return mapping[r.lower()]
+    if category_key in mapping and (not r):
+        return mapping[category_key]
+    return r or "Item from photo"
 
 
 def visual_helper(image, glass, grease, corrugated, plastic12):
@@ -294,18 +391,58 @@ def visual_helper(image, glass, grease, corrugated, plastic12):
         msg = (
             "The Visual Helper's machine-learning model is not fully configured on this device.<br>"
             "Please rely on the Search Assistant tab for the most accurate sorting guidance.<br>"
-            f"Error: {e}"
+            f"<span style='font-size:11px;color:#666;'>Error: {str(e)}</span>"
         )
-        return f"<div style='color:#000 !important;'><b>{msg}</b></div>"
-
-    # Confidence hint
-    if confidence is not None and confidence < 0.55:
-        hint = (
-            "<div style='margin-top:8px;font-size:12px;color:#555;'>"
-            "Low confidence: please double-check and consider using the Search Assistant.</div>"
+        return (
+            "<div style='border:1px solid #ddd;border-radius:12px;padding:16px;background:#fff;"
+            "box-shadow:0 2px 6px rgba(0,0,0,0.05);"
+            "font-family:Inter,-apple-system,Helvetica,Arial,sans-serif;"
+            "color:#222;line-height:1.45;max-width:640px;'>"
+            f"{msg}</div>"
         )
-    else:
-        hint = ""
 
-    panel = render_detail_panel(cat_key, False, f"{raw_label} (from photo)")
-    return panel + hint
+    if cat_key == "unknown":
+        msg = (
+            "The Visual Helper could not confidently classify this item from the photo.<br>"
+            "Please try the Search Assistant tab and type the item name directly "
+            '(for example, "pizza box", "glass bottle", or "microwave").'
+        )
+        return (
+            "<div style='border:1px solid #ddd;border-radius:12px;padding:16px;background:#fff;"
+            "box-shadow:0 2px 6px rgba(0,0,0,0.05);"
+            "font-family:Inter,-apple-system,Helvetica,Arial,sans-serif;"
+            "color:#222;line-height:1.45;max-width:640px;'>"
+            f"{msg}</div>"
+        )
+
+    display_name = _pretty_visual_title(cat_key, raw_label)
+    return render_detail_panel(cat_key, False, display_name)
+
+
+# ---------- UI layout ----------
+
+theme = gr.themes.Soft(primary_hue="green")
+
+# Custom gray "pill" label styling (replaces the green Gradio label)
+GRAY_LABEL_CSS = r"""
+.gray-pill {
+  display: inline-block;
+  background: #e5e7eb;      /* light gray */
+  color: #111827;           /* near-black text */
+  padding: 6px 12px;
+  border-radius: 8px;
+  border: 1px solid #cbd5e1;
+  font-weight: 700;
+  font-size: 18px;
+  margin-bottom: 8px;
+}
+@media (prefers-color-scheme: dark) {
+  .gray-pill {
+    background: #374151;    /* dark gray */
+    color: #f9fafb;         /* near-white text */
+    border-color: #4b5563;
+  }
+}
+"""
+
+
