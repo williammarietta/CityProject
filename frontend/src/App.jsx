@@ -1,174 +1,143 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+// frontend/src/App.jsx
+import { useEffect, useState } from "react";
+import "./App.css";
 
-const BACKEND_URL =
-  import.meta.env.VITE_BACKEND_URL || "http://127.0.0.1:8000";
+const API_BASE = "https://cityproject.onrender.com";
 
-export default function App() {
+function App() {
+  // Which tab is active: "search" or "visual"
   const [activeTab, setActiveTab] = useState("search");
 
-  // ---------------- Search Assistant state ----------------
+  // ----- Search Assistant state -----
   const [query, setQuery] = useState("");
   const [suggestions, setSuggestions] = useState([]);
   const [isLoadingSuggestions, setIsLoadingSuggestions] = useState(false);
-  const [searchResultHtml, setSearchResultHtml] = useState("");
-  const [usedLLM, setUsedLLM] = useState(false);
-  const [searchError, setSearchError] = useState("");
+  const [resultHtml, setResultHtml] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [error, setError] = useState("");
 
-  // For suggestions timing
-  const suggestAbortRef = useRef(null);
-
-  // ---------------- Visual Helper state ----------------
-  const [vhFile, setVhFile] = useState(null);
-  const [vhImagePreview, setVhImagePreview] = useState("");
+  // ----- Visual Helper state -----
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreviewUrl, setImagePreviewUrl] = useState("");
   const [vhGlass, setVhGlass] = useState(false);
   const [vhGrease, setVhGrease] = useState(false);
   const [vhCorrugated, setVhCorrugated] = useState(false);
   const [vhPlastic12, setVhPlastic12] = useState(false);
   const [vhResultHtml, setVhResultHtml] = useState("");
-  const [vhIsLoading, setVhIsLoading] = useState(false);
   const [vhError, setVhError] = useState("");
+  const [vhIsLoading, setVhIsLoading] = useState(false);
 
-  // ---------------- Search Assistant helpers ----------------
-
-  async function fetchSuggestions(text) {
-    const q = (text || "").trim();
-    if (!q) {
-      setSuggestions([]);
-      return;
-    }
-
-    try {
-      setIsLoadingSuggestions(true);
-
-      // Abort previous in-flight request
-      if (suggestAbortRef.current) {
-        suggestAbortRef.current.abort();
-      }
-      const controller = new AbortController();
-      suggestAbortRef.current = controller;
-
-      const resp = await fetch(
-        `${BACKEND_URL}/api/suggestions?q=${encodeURIComponent(q)}`,
-        { signal: controller.signal }
-      );
-      if (!resp.ok) throw new Error("Suggestion request failed");
-      const data = await resp.json();
-      setSuggestions(data?.suggestions || []);
-    } catch (e) {
-      // If aborted, ignore
-      if (e?.name !== "AbortError") {
-        setSuggestions([]);
-      }
-    } finally {
-      setIsLoadingSuggestions(false);
-    }
-  }
-
+  // Fetch suggestions whenever query changes
   useEffect(() => {
-    const q = (query || "").trim();
-    if (!q) {
-      setSuggestions([]);
-      return;
+    let ignore = false;
+
+    async function getSuggestions() {
+      const q = query.trim();
+      if (!q) {
+        setSuggestions([]);
+        return;
+      }
+
+      setIsLoadingSuggestions(true);
+      try {
+        const response = await fetch(
+          `${API_BASE}/api/suggestions?q=${encodeURIComponent(q)}`
+        );
+        if (!response.ok) throw new Error("Suggestion request failed");
+        const data = await response.json();
+        if (!ignore) setSuggestions(data.suggestions || []);
+      } catch (e) {
+        if (!ignore) setSuggestions([]);
+      } finally {
+        if (!ignore) setIsLoadingSuggestions(false);
+      }
     }
 
-    const t = setTimeout(() => {
-      fetchSuggestions(q);
-    }, 250);
-
-    return () => clearTimeout(t);
+    // small debounce
+    const t = setTimeout(getSuggestions, 200);
+    return () => {
+      ignore = true;
+      clearTimeout(t);
+    };
   }, [query]);
 
-  async function runSearch(qOverride = null) {
-    const q = (qOverride ?? query ?? "").trim();
+  async function runSearch() {
+    const q = query.trim();
     if (!q) return;
 
-    setSearchError("");
-    setSearchResultHtml("");
-    setUsedLLM(false);
+    setError("");
+    setResultHtml("");
+    setIsSearching(true);
 
     try {
-      const resp = await fetch(`${BACKEND_URL}/api/search`, {
+      const response = await fetch(`${API_BASE}/api/search`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ query: q }),
       });
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || "Search failed");
-      }
-
-      const data = await resp.json();
-      setSearchResultHtml(data?.html || "");
-      setUsedLLM(Boolean(data?.used_llm || data?.usedLLM));
-    } catch (e) {
-      setSearchError(String(e?.message || e));
+      if (!response.ok) throw new Error("Network response was not ok");
+      const data = await response.json();
+      setResultHtml(data.html || "");
+    } catch (err) {
+      console.error(err);
+      setError("Search failed. Please try again.");
+    } finally {
+      setIsSearching(false);
     }
-  }
-
-  function onPickSuggestion(name) {
-    setQuery(name);
-    setSuggestions([]);
-    runSearch(name);
-  }
-
-  // ---------------- Visual Helper helpers ----------------
-
-  function onPickFile(file) {
-    setVhFile(file);
-    setVhResultHtml("");
-    setVhError("");
-
-    if (!file) {
-      setVhImagePreview("");
-      return;
-    }
-
-    const url = URL.createObjectURL(file);
-    setVhImagePreview(url);
   }
 
   async function runVisualHelper() {
-    if (!vhFile) {
-      setVhError("Please choose an image first.");
+    if (!imageFile) {
+      setVhError("Please upload an image first.");
       return;
     }
 
-    setVhIsLoading(true);
     setVhError("");
     setVhResultHtml("");
+    setVhIsLoading(true);
 
     try {
-      const form = new FormData();
-      form.append("file", vhFile);
-      form.append("glass", String(vhGlass));
-      form.append("grease", String(vhGrease));
-      form.append("corrugated", String(vhCorrugated));
-      form.append("plastic12", String(vhPlastic12));
+      const formData = new FormData();
+      formData.append("file", imageFile);
+      formData.append("glass", String(vhGlass));
+      formData.append("grease", String(vhGrease));
+      formData.append("corrugated", String(vhCorrugated));
+      formData.append("plastic12", String(vhPlastic12));
 
-      const resp = await fetch(`${BACKEND_URL}/api/visual-helper`, {
+      const response = await fetch(`${API_BASE}/api/visual-helper`, {
         method: "POST",
-        body: form,
+        body: formData,
       });
 
-      if (!resp.ok) {
-        const text = await resp.text();
-        throw new Error(text || "Visual Helper failed");
-      }
-
-      const data = await resp.json();
-      setVhResultHtml(data?.html || "");
-    } catch (e) {
-      setVhError(String(e?.message || e));
+      if (!response.ok) throw new Error("Visual Helper request failed");
+      const data = await response.json();
+      setVhResultHtml(data.html || "");
+    } catch (err) {
+      console.error(err);
+      setVhError("Visual Helper failed. Please try again.");
     } finally {
       setVhIsLoading(false);
     }
   }
 
-  const tabClass = (t) =>
-    `tab ${activeTab === t ? "tab-active" : ""}`.trim();
+  function onSuggestionClick(itemName) {
+    setQuery(itemName);
+    setSuggestions([]);
+    setTimeout(runSearch, 0);
+  }
 
-  const canSearch = useMemo(() => (query || "").trim().length > 0, [query]);
+  function onPickImage(file) {
+    setImageFile(file || null);
+    setVhResultHtml("");
+    setVhError("");
+
+    if (!file) {
+      setImagePreviewUrl("");
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setImagePreviewUrl(url);
+  }
 
   return (
     <div className="page">
@@ -180,10 +149,16 @@ export default function App() {
       </header>
 
       <div className="tabs">
-        <button className={tabClass("search")} onClick={() => setActiveTab("search")}>
+        <button
+          className={`tab ${activeTab === "search" ? "tab-active" : ""}`}
+          onClick={() => setActiveTab("search")}
+        >
           Search Assistant
         </button>
-        <button className={tabClass("visual")} onClick={() => setActiveTab("visual")}>
+        <button
+          className={`tab ${activeTab === "visual" ? "tab-active" : ""}`}
+          onClick={() => setActiveTab("visual")}
+        >
           Visual Helper (Beta)
         </button>
       </div>
@@ -202,22 +177,22 @@ export default function App() {
                 if (e.key === "Enter") runSearch();
               }}
             />
-            <button className="btn" disabled={!canSearch} onClick={() => runSearch()}>
-              Search
+            <button className="btn" onClick={runSearch} disabled={isSearching}>
+              {isSearching ? "Searching..." : "Search"}
             </button>
           </div>
 
-          {isLoadingSuggestions && (
-            <p className="muted-text">Loading suggestions…</p>
-          )}
+          {isLoadingSuggestions && <p className="muted-text">Loading…</p>}
 
           {!isLoadingSuggestions && suggestions.length > 0 && (
             <div className="suggestions">
-              <div className="muted-text">Suggestions (click one):</div>
               <ul className="suggestion-list">
                 {suggestions.map((s) => (
                   <li key={s}>
-                    <button className="suggestion-item" onClick={() => onPickSuggestion(s)}>
+                    <button
+                      className="suggestion-item"
+                      onClick={() => onSuggestionClick(s)}
+                    >
                       {s}
                     </button>
                   </li>
@@ -228,8 +203,9 @@ export default function App() {
 
           {!isLoadingSuggestions && suggestions.length === 0 && query && (
             <p className="muted-text">
-              No suggestions yet. You can still finish typing your item and press Search,
-              even if it doesn&apos;t appear in this list.
+              No suggestions yet. You can still finish typing your item and press
+              Search — we'll check it even if it isn't in the list (and may use
+              OpenAI as a fallback if needed).
             </p>
           )}
 
@@ -239,20 +215,13 @@ export default function App() {
             </p>
           )}
 
-          {searchError && <div className="error">{searchError}</div>}
+          {error && <div className="error">{error}</div>}
 
-          {searchResultHtml && (
-            <div className="result-area">
-              {usedLLM && (
-                <div className="pill">
-                  Used LLM fallback (OpenAI) for this result
-                </div>
-              )}
-              <div
-                className="result-html"
-                dangerouslySetInnerHTML={{ __html: searchResultHtml }}
-              />
-            </div>
+          {resultHtml && (
+            <div
+              className="result-html"
+              dangerouslySetInnerHTML={{ __html: resultHtml }}
+            />
           )}
         </section>
       )}
@@ -260,84 +229,72 @@ export default function App() {
       {activeTab === "visual" && (
         <section className="card">
           <div className="card-title">Visual Helper (Beta)</div>
-          <div className="muted-text">
-            Upload a photo and optionally check any obvious cues. These checkboxes
-            override the ML model.
-          </div>
 
           <div className="visual-row">
             <input
               type="file"
               accept="image/*"
-              onChange={(e) => onPickFile(e.target.files?.[0] || null)}
+              onChange={(e) => onPickImage(e.target.files?.[0] || null)}
             />
           </div>
 
-          {vhImagePreview && (
+          {imagePreviewUrl && (
             <div className="preview">
-              <img src={vhImagePreview} alt="preview" />
+              <img src={imagePreviewUrl} alt="preview" />
             </div>
           )}
 
           <div className="checkbox-grid">
-            <div className="checkbox-item">
+            <label className="checkbox-item">
               <input
-                id="vh-glass"
                 type="checkbox"
                 checked={vhGlass}
                 onChange={(e) => setVhGlass(e.target.checked)}
               />
-              <label htmlFor="vh-glass">Glass</label>
-            </div>
+              Glass
+            </label>
 
-            <div className="checkbox-item">
+            <label className="checkbox-item">
               <input
-                id="vh-grease"
                 type="checkbox"
                 checked={vhGrease}
                 onChange={(e) => setVhGrease(e.target.checked)}
               />
-              <label htmlFor="vh-grease">Visible grease / food</label>
-            </div>
+              Visible grease / food
+            </label>
 
-            <div className="checkbox-item">
+            <label className="checkbox-item">
               <input
-                id="vh-corrugated"
                 type="checkbox"
                 checked={vhCorrugated}
                 onChange={(e) => setVhCorrugated(e.target.checked)}
               />
-              <label htmlFor="vh-corrugated">Corrugated cardboard (shipping box)</label>
-            </div>
+              Corrugated cardboard (shipping box)
+            </label>
 
-            <div className="checkbox-item">
+            <label className="checkbox-item">
               <input
-                id="vh-plastic12"
                 type="checkbox"
                 checked={vhPlastic12}
                 onChange={(e) => setVhPlastic12(e.target.checked)}
               />
-              <label htmlFor="vh-plastic12">
-                Plastic #1 or #2 (check the triangle!)
-              </label>
-            </div>
+              Plastic #1 or #2 (check the triangle!)
+            </label>
           </div>
 
           <div className="visual-actions">
             <button className="btn" onClick={runVisualHelper} disabled={vhIsLoading}>
-              {vhIsLoading ? "Analyzing…" : "Analyze photo"}
+              {vhIsLoading ? "Analyzing..." : "Analyze photo"}
             </button>
           </div>
 
           {vhError && <div className="error">{vhError}</div>}
 
           {vhResultHtml && (
-            <div className="result-area">
-              <div
-                className="result-html"
-                dangerouslySetInnerHTML={{ __html: vhResultHtml }}
-              />
-            </div>
+            <div
+              className="result-html"
+              dangerouslySetInnerHTML={{ __html: vhResultHtml }}
+            />
           )}
         </section>
       )}
@@ -348,3 +305,5 @@ export default function App() {
     </div>
   );
 }
+
+export default App;
