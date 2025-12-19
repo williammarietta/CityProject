@@ -249,8 +249,11 @@ def _search_with_fallback(query: str) -> str:
     llm = _llm_non_item_or_classify(q)
     if llm:
         if llm.get("non_item") is True:
-            return _render_notice_card(q, llm.get("message", ""), llm.get("hint", ""))
-
+            return _render_notice_card(
+                q,
+                "Please try again. Provide a specific item for classification.",
+                llm.get("hint", ""),
+            )
         cat = llm.get("category")
         if cat:
             bulk_flag = bool(llm.get("bulk", False))
